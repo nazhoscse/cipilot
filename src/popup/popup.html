@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="popup.css">
+    <title>CI/CD Assistant</title>
+</head>
+<body>
+    <div id="popup-container">
+        <h1>CI/CD Assistant</h1>
+        <div id="llm-settings">
+            <div>
+                <strong>LLM:</strong> 
+                <select id="llm-provider-select" style="margin-left: 4px;">
+                    <option value="ollama">Ollama (local)</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="xai">xAI (Grok)</option>
+                    <option value="groq">Groq</option>
+                </select>
+                <span style="margin-left: 4px;">·</span>
+                <span id="llm-model" style="margin-left: 4px;">-</span>
+            </div>
+            <button id="open-settings">⚙️ Settings</button>
+        </div>
+        <ul id="ci-list"></ul>
+        <p id="no-ci-message" style="display: none;">No CI services detected.</p>
+    </div>
+    <script src="popup.js"></script>
+</body>
+</html>
