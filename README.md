@@ -188,7 +188,7 @@ The Chrome extension works independently on GitHub pages:
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable **Developer mode** (toggle in the top right)
 3. Click **Load unpacked**
-4. Select the `src/` directory from this repository
+4. Select the `extension/` directory from this repository
 5. Pin the extension for easy access (click the puzzle piece icon in Chrome's toolbar)
 
 > **Note:** The Chrome extension communicates with the backend at `http://localhost:5200` by default. The web application is the recommended interface for most users.
@@ -642,7 +642,7 @@ ci-cd-assistant-extension-main/
 │           ├── clipboard.ts, dateFormat.ts
 │           └── index.ts
 │
-└── src/                          # ── Chrome Extension (Manifest V3) ──
+└── extension/                    # ── Chrome Extension (Manifest V3) ──
     ├── manifest.json             # Extension manifest (permissions, content scripts)
     ├── background.js             # Service worker (GitHub API, fork/branch/PR)
     ├── content.js                # GitHub page integration (banner, modal, migration UI)

@@ -19,6 +19,7 @@ app.add_middleware(
     allow_origins=[
         "https://cipilot.com",
         "https://www.cipilot.com",
+        "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5200",

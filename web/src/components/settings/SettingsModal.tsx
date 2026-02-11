@@ -94,8 +94,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   }
 
-  // Check if running in production (deployed)
-  const isProduction = import.meta.env.PROD && import.meta.env.VITE_API_URL !== 'http://localhost:5200'
+  // Check if running in production (deployed to remote server)
+  // Allow Ollama if running on localhost (includes Docker local setup)
+  const isProduction = import.meta.env.PROD && 
+    !window.location.hostname.includes('localhost') && 
+    !window.location.hostname.includes('127.0.0.1')
 
   const providerOptions = LLM_PROVIDERS
     .filter((p) => {

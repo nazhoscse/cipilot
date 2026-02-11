@@ -1,6 +1,7 @@
+import os
 import requests
 
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
 DEFAULT_XAI_BASE_URL = "https://api.x.ai"
 DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai"

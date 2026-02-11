@@ -284,7 +284,7 @@ Check push access (GET /repos/{owner}/{repo})
 
 ## Chrome Extension Implementation
 
-**Directory:** `src/` (Manifest V3)
+**Directory:** `extension/` (Manifest V3)
 
 | File | Purpose |
 |------|---------|
