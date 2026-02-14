@@ -520,7 +520,11 @@ export function ConversionPanel() {
 
     setIsValidating(true)
     try {
-      const validation = await cicdApi.validate(editedYaml)
+      // Get original config for Double Check semantic verification
+      const originalConfig = Object.values(fetchedConfigs).join('\n---\n')
+      const llmSettings = getCurrentLLMSettings()
+      
+      const validation = await cicdApi.validate(editedYaml, originalConfig, llmSettings)
       setConversionResult({
         convertedConfig: editedYaml,
         validation,
@@ -529,8 +533,10 @@ export function ConversionPanel() {
         modelUsed: conversionResult?.modelUsed,
       })
 
-      if (validation.yamlOk && validation.actionlintOk) {
+      if (validation.yamlOk && validation.actionlintOk && validation.doubleCheckOk !== false) {
         toast.success('Validation passed', 'The workflow is valid')
+      } else if (validation.yamlOk && validation.actionlintOk && validation.doubleCheckOk === false) {
+        toast.warning('Double Check issues', 'Semantic verification found potential issues')
       } else {
         toast.warning('Validation issues', 'Check the validation details')
       }
@@ -547,7 +553,7 @@ export function ConversionPanel() {
     } finally {
       setIsValidating(false)
     }
-  }, [editedYaml, conversionResult, setConversionResult, toast])
+  }, [editedYaml, conversionResult, setConversionResult, toast, fetchedConfigs, getCurrentLLMSettings])
 
   const handleRetry = useCallback(
     async (feedback: string) => {
@@ -900,6 +906,11 @@ export function ConversionPanel() {
         actionlintOutput={
           conversionResult?.validation?.actionlintOk === false
             ? conversionResult?.validation?.actionlintOutput
+            : undefined
+        }
+        doubleCheckReasons={
+          conversionResult?.validation?.doubleCheckOk === false
+            ? conversionResult?.validation?.doubleCheckReasons
             : undefined
         }
         isLoading={isLoading}

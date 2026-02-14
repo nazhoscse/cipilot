@@ -19,6 +19,10 @@ class ValidationResult(BaseModel):
     yamlError: Optional[str] = None
     actionlintOk: bool
     actionlintOutput: Optional[str] = None
+    # Agentic Double Check - semantic verification by LLM
+    doubleCheckOk: Optional[bool] = None
+    doubleCheckReasons: Optional[List[str]] = None
+    doubleCheckSkipped: Optional[bool] = None  # True if YAML/lint failed
 
 
 class ConversionRequest(BaseModel):
@@ -31,6 +35,8 @@ class ConversionRequest(BaseModel):
 
 class ValidateGithubActionsRequest(BaseModel):
     yaml: str
+    originalConfig: Optional[str] = None  # For Double Check semantic verification
+    llmSettings: Optional[LLMSettings] = None
 
 
 class RetryConversionRequest(BaseModel):

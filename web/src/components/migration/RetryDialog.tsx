@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, AlertCircle } from 'lucide-react'
+import { RefreshCw, AlertCircle, Brain } from 'lucide-react'
 import { Modal, Button } from '../common'
 
 interface RetryDialogProps {
@@ -8,6 +8,7 @@ interface RetryDialogProps {
   onRetry: (feedback: string) => void
   yamlError?: string
   actionlintOutput?: string
+  doubleCheckReasons?: string[]
   isLoading?: boolean
 }
 
@@ -15,7 +16,7 @@ interface RetryDialogProps {
  * Build the default feedback message based on validation errors
  * Matches the Chrome extension format
  */
-function buildDefaultFeedback(yamlError?: string, actionlintOutput?: string): string {
+function buildDefaultFeedback(yamlError?: string, actionlintOutput?: string, doubleCheckReasons?: string[]): string {
   const parts: string[] = []
 
   if (yamlError) {
@@ -39,6 +40,14 @@ function buildDefaultFeedback(yamlError?: string, actionlintOutput?: string): st
     }
   }
 
+  if (doubleCheckReasons && doubleCheckReasons.length > 0) {
+    parts.push(
+      'Please fix below semantic issues identified by the Double Check AI verification:\n\n' +
+      'Semantic Issues:\n' +
+      doubleCheckReasons.map(r => `- ${r}`).join('\n')
+    )
+  }
+
   return parts.join('\n\n---\n\n')
 }
 
@@ -48,6 +57,7 @@ export function RetryDialog({
   onRetry,
   yamlError,
   actionlintOutput,
+  doubleCheckReasons,
   isLoading = false,
 }: RetryDialogProps) {
   const [feedback, setFeedback] = useState('')
@@ -55,16 +65,17 @@ export function RetryDialog({
   // Pre-fill with formatted validation errors
   useEffect(() => {
     if (isOpen) {
-      const defaultFeedback = buildDefaultFeedback(yamlError, actionlintOutput)
+      const defaultFeedback = buildDefaultFeedback(yamlError, actionlintOutput, doubleCheckReasons)
       if (defaultFeedback) {
         setFeedback(defaultFeedback)
       } else {
         setFeedback('')
       }
     }
-  }, [isOpen, yamlError, actionlintOutput])
+  }, [isOpen, yamlError, actionlintOutput, doubleCheckReasons])
 
   const hasValidationErrors = !!(yamlError || actionlintOutput)
+  const hasDoubleCheckIssues = !!(doubleCheckReasons && doubleCheckReasons.length > 0)
 
   const handleSubmit = () => {
     if (feedback.trim()) {
@@ -111,6 +122,21 @@ export function RetryDialog({
                     ? 'YAML syntax errors found in the workflow.'
                     : 'Linting issues found in the workflow.'}
                 {' '}The feedback below has been pre-filled to help the AI fix them.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {hasDoubleCheckIssues && !hasValidationErrors && (
+          <div className="flex gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+            <Brain className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                Semantic Issues Detected
+              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                The AI Double Check found potential semantic issues with the migration.
+                {' '}The feedback below has been pre-filled to help address them.
               </p>
             </div>
           </div>

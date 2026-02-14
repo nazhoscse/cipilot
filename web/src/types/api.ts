@@ -29,6 +29,10 @@ export interface ValidationResult {
   yamlError?: string
   actionlintOk: boolean
   actionlintOutput?: string
+  // Agentic Double Check - semantic verification by LLM
+  doubleCheckOk?: boolean
+  doubleCheckReasons?: string[]
+  doubleCheckSkipped?: boolean  // True if YAML/lint failed
 }
 
 export interface ConversionRequest {
@@ -62,6 +66,8 @@ export interface RetryConversionRequest {
 
 export interface ValidateGithubActionsRequest {
   yaml: string
+  originalConfig?: string  // For Double Check semantic verification
+  llmSettings?: LLMSettings
 }
 
 export interface APIError {

@@ -20,10 +20,14 @@ export const cicdApi = {
   },
 
   /**
-   * Validate GitHub Actions YAML
+   * Validate GitHub Actions YAML with optional Double Check
    */
-  async validate(yaml: string): Promise<ValidationResult> {
-    const request: ValidateGithubActionsRequest = { yaml }
+  async validate(yaml: string, originalConfig?: string, llmSettings?: LLMSettings): Promise<ValidationResult> {
+    const request: ValidateGithubActionsRequest = { 
+      yaml,
+      originalConfig,
+      llmSettings,
+    }
     const response = await apiClient.post<ValidationResult>('/validate-github-actions', request)
     return response.data
   },

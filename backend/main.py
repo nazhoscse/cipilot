@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from models import ConversionRequest, ConversionResponse, ValidateGithubActionsRequest, ValidationResult, RetryConversionRequest
-from llm_converter import convert_pipeline
+from llm_converter import convert_pipeline, semantic_verify_migration
 import uvicorn
 import tempfile
 import subprocess
@@ -112,12 +112,93 @@ def _validate_github_actions_yaml(yaml_text: str) -> ValidationResult:
         yamlError=yaml_err,
         actionlintOk=actionlint_ok,
         actionlintOutput=actionlint_out,
+        # Double check fields will be populated by _semantic_double_check
+        doubleCheckOk=None,
+        doubleCheckReasons=None,
+        doubleCheckSkipped=not (yaml_ok and actionlint_ok),  # Skip if YAML/lint failed
     )
+
+
+def _semantic_double_check(
+    *,
+    source_config: str,
+    generated_config: str,
+    source_ci: str,
+    target_ci: str,
+    provider: str,
+    model: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> tuple[bool, list[str]]:
+    """
+    Perform agentic semantic verification of CI/CD migration.
+    
+    Returns:
+        tuple[bool, list[str]]: (passed, reasons)
+    """
+    print(f"[DOUBLE-CHECK] Starting semantic verification with {provider}/{model}")
+    
+    result = semantic_verify_migration(
+        provider=provider,
+        model=model,
+        source_config=source_config,
+        generated_config=generated_config,
+        source_ci=source_ci,
+        target_ci=target_ci,
+        base_url=base_url,
+        api_key=api_key,
+    )
+    
+    passed = result.get("passed", False)
+    reasons = result.get("reasons", [])
+    missing = result.get("missing_features", [])
+    confidence = result.get("confidence", 0.0)
+    
+    print(f"[DOUBLE-CHECK] Result: passed={passed}, confidence={confidence}")
+    print(f"[DOUBLE-CHECK] Reasons: {reasons}")
+    if missing:
+        print(f"[DOUBLE-CHECK] Missing features: {missing}")
+    
+    # Combine reasons with missing features for display
+    all_reasons = list(reasons)
+    if missing:
+        all_reasons.append(f"Missing features: {', '.join(missing)}")
+    if confidence > 0:
+        all_reasons.append(f"Confidence: {confidence:.0%}")
+    
+    return passed, all_reasons
 
 
 @app.post("/validate-github-actions", response_model=ValidationResult)
 async def validate_github_actions(request: ValidateGithubActionsRequest):
-    return _validate_github_actions_yaml(request.yaml)
+    validation = _validate_github_actions_yaml(request.yaml)
+    
+    # Agentic Double Check - only if YAML/lint passed AND we have original config
+    if validation.yamlOk and validation.actionlintOk and request.originalConfig:
+        llm = request.llmSettings
+        provider = (llm.provider if llm else 'ollama')
+        model = (llm.model if llm else 'gemma3:12b')
+        base_url = (llm.baseUrl if llm else None)
+        api_key = (llm.apiKey if llm else None)
+        
+        print("[VALIDATE DOUBLE-CHECK] Running semantic verification...")
+        double_check_ok, double_check_reasons = _semantic_double_check(
+            source_config=request.originalConfig,
+            generated_config=request.yaml,
+            source_ci="Original CI",
+            target_ci="github-actions",
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+        )
+        validation.doubleCheckOk = double_check_ok
+        validation.doubleCheckReasons = double_check_reasons
+        validation.doubleCheckSkipped = False
+    elif not (validation.yamlOk and validation.actionlintOk):
+        validation.doubleCheckSkipped = True
+    
+    return validation
 
 
 @app.post("/retry-conversion", response_model=ConversionResponse)
@@ -163,6 +244,25 @@ async def retry_conversion(request: RetryConversionRequest):
         validation = None
         if request.targetPlatform == 'github-actions':
             validation = _validate_github_actions_yaml(converted)
+            
+            # Agentic Double Check - only if YAML and lint both passed
+            if validation.yamlOk and validation.actionlintOk:
+                print("[RETRY DOUBLE-CHECK] YAML and lint passed, performing semantic verification...")
+                double_check_ok, double_check_reasons = _semantic_double_check(
+                    source_config=request.originalTravisConfig,
+                    generated_config=converted,
+                    source_ci="Original CI",
+                    target_ci=request.targetPlatform,
+                    provider=provider,
+                    model=model,
+                    base_url=base_url,
+                    api_key=api_key,
+                )
+                validation.doubleCheckOk = double_check_ok
+                validation.doubleCheckReasons = double_check_reasons
+                validation.doubleCheckSkipped = False
+            else:
+                validation.doubleCheckSkipped = True
 
         # Increment attempts from the request
         current_attempts = (request.currentAttempts or 1) + 1
@@ -309,6 +409,61 @@ async def convert_cicd(request: ConversionRequest):
                 )
                 converted = converted_retry
                 validation = _validate_github_actions_yaml(converted)
+            
+            # Agentic Double Check - only if YAML and lint both passed
+            if validation.yamlOk and validation.actionlintOk:
+                print("[DOUBLE-CHECK] YAML and lint passed, performing semantic verification...")
+                double_check_ok, double_check_reasons = _semantic_double_check(
+                    source_config=pipeline_content,
+                    generated_config=converted,
+                    source_ci=src_display_name,
+                    target_ci=target_platform,
+                    provider=provider,
+                    model=model,
+                    base_url=base_url,
+                    api_key=api_key,
+                )
+                validation.doubleCheckOk = double_check_ok
+                validation.doubleCheckReasons = double_check_reasons
+                validation.doubleCheckSkipped = False
+                
+                # If double check failed, attempt one more retry with semantic feedback
+                if not double_check_ok and attempts < 3:
+                    attempts += 1
+                    semantic_feedback = (
+                        "SEMANTIC VERIFICATION FAILED:\n"
+                        + "\n".join(f"- {r}" for r in double_check_reasons)
+                        + "\n\nPlease fix the generated GitHub Actions YAML to address these semantic issues."
+                    )
+                    
+                    converted_retry = convert_pipeline(
+                        provider=provider,
+                        model=model,
+                        source_ci=src_platform,
+                        target_ci=target_platform,
+                        content=pipeline_content,
+                        base_url=base_url,
+                        api_key=api_key,
+                        validation_feedback=semantic_feedback,
+                    )
+                    converted = converted_retry
+                    validation = _validate_github_actions_yaml(converted)
+                    
+                    # Re-run double check on retry
+                    if validation.yamlOk and validation.actionlintOk:
+                        double_check_ok, double_check_reasons = _semantic_double_check(
+                            source_config=pipeline_content,
+                            generated_config=converted,
+                            source_ci=src_display_name,
+                            target_ci=target_platform,
+                            provider=provider,
+                            model=model,
+                            base_url=base_url,
+                            api_key=api_key,
+                        )
+                        validation.doubleCheckOk = double_check_ok
+                        validation.doubleCheckReasons = double_check_reasons
+                        validation.doubleCheckSkipped = False
             
         return ConversionResponse(
             convertedConfig=converted,
