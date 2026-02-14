@@ -66,28 +66,45 @@ def _build_prompt(source_ci: str, target_ci: str, content: str, feedback: str | 
     
     return (
         "You are a CI/CD migration expert specializing in PRECISE, MINIMAL conversions.\n\n"
-        f"TASK: Convert the source CI/CD configuration into a {target_name}.\n\n"
-        "=== GOLDEN RULE ===\n"
-        "ONLY convert what EXISTS in the source. Do NOT add extra steps, jobs, or features.\n"
-        "If the source has 1 job with 1 step, the output should have 1 job with equivalent steps.\n"
-        "Do NOT hallucinate or add: tests, deployments, caching, or any logic not in the source.\n\n"
+        f"TASK: Convert the {source_ci} configuration into {target_name}.\n\n"
+        "=== CRITICAL: ZERO HALLUCINATION RULE ===\n"
+        "You MUST convert ONLY what EXISTS in the source. Do NOT invent or add ANYTHING.\n"
+        "- Count the steps/tasks in the source. Output should have the SAME number of functional steps.\n"
+        "- Do NOT add random commands like 'which X', 'verify X', 'test X' unless in source.\n"
+        "- Do NOT add any tools, scripts, or programs not mentioned in the source.\n"
+        "- If source has 1 command (e.g., echo), output has ONLY that command (plus minimal setup).\n"
+        "- Do NOT assume what the project needs - convert ONLY what is explicitly defined.\n\n"
+        "=== ALLOWED ADDITIONS (ONLY THESE) ===\n"
+        "- actions/checkout@v4 (required for GitHub Actions to access code)\n"
+        "- actions/setup-X@v4 ONLY if source explicitly uses that language/runtime\n"
+        "- Container/services ONLY if source explicitly specifies Docker image/services\n\n"
+        "=== CRITICAL: VERSION PRESERVATION ===\n"
+        "When source uses Docker images with specific versions, you MUST preserve the version:\n"
+        "- docker: cimg/go:1.12.9 → uses: actions/setup-go@v4 WITH go-version: '1.12.9'\n"
+        "- docker: python:3.9 → uses: actions/setup-python@v4 WITH python-version: '3.9'\n"
+        "- docker: node:18 → uses: actions/setup-node@v4 WITH node-version: '18'\n"
+        "ALWAYS extract and specify the exact version from Docker image tags!\n\n"
         "=== OUTPUT REQUIREMENTS ===\n"
         f"1. Output ONLY valid {target_name} YAML - no explanations, no markdown, no code blocks\n"
         "2. Use proper GitHub Actions syntax: name, on, jobs with runs-on and steps\n"
         "3. Services must be mappings: services:\\n  mysql:\\n    image: mysql:latest\n"
-        "4. Use action versions @v4: actions/checkout@v4, actions/setup-node@v4, etc.\n"
+        "4. ALWAYS use @v4 for ALL actions - NEVER use @v3 or older:\n"
+        "   - actions/checkout@v4 (NOT @v3)\n"
+        "   - actions/setup-node@v4, actions/setup-python@v4, actions/setup-go@v4, etc.\n"
         "5. Use $(command) for shell substitution, NOT backticks\n\n"
-        "=== SEMANTIC EQUIVALENCE CHECKLIST ===\n"
-        "✓ TRIGGERS: Convert source triggers to equivalent 'on:' events (push, pull_request, schedule)\n"
+        "=== CONVERT EXACTLY WHAT EXISTS ===\n"
+        "✓ TRIGGERS: Convert source triggers (push, PR, schedule, manual) to 'on:' events\n"
         "✓ ENVIRONMENT: Preserve ALL environment variables exactly as defined\n"
-        "✓ SERVICES: Convert Docker services (mysql, redis, etc.) to GitHub Actions services\n"
-        "✓ STEPS: Convert each source step to an equivalent GitHub Actions step\n"
-        "✓ COMMANDS: Preserve ALL shell commands exactly - do not modify or add commands\n"
-        "✓ CONTAINER: If source uses a Docker image, use 'container:' in GitHub Actions\n"
-        "✗ DO NOT ADD: Extra test steps, deploy steps, cache steps, or any step not in source\n\n"
+        "✓ SERVICES: Convert services (mysql, redis, postgres) ONLY if in source\n"
+        "✓ STEPS: Convert each source step/task to ONE equivalent GitHub Actions step\n"
+        "✓ COMMANDS: Copy shell commands/scripts EXACTLY - do not add or modify\n"
+        "✓ MATRIX: Convert build matrix/strategy if present in source\n"
+        "✓ ARTIFACTS: Convert artifact upload/download if present in source\n"
+        "✓ CACHING: Convert cache configurations ONLY if explicitly in source\n"
+        "✗ DO NOT INVENT: tools, scripts, verify steps, tests, or anything not in source\n\n"
         + multi_service_note
         + feedback_block +
-        "SOURCE CI/CD CONFIGURATION TO CONVERT:\n"
+        f"SOURCE {source_ci.upper()} CONFIGURATION TO CONVERT:\n"
         "---\n"
         f"{content}\n"
         "---\n\n"
@@ -284,15 +301,37 @@ def _google_chat(*, base_url: str | None, api_key: str, model: str, system: str,
 
 
 def _detect_wrong_format(output: str, source_ci: str, target_ci: str) -> bool:
-    """Detect if LLM returned source format instead of target format"""
+    """Detect if LLM returned source format instead of target format - works for any CI platform"""
     output_lower = output.lower()
     
-    # If converting TO GitHub Actions, check for Travis CI keywords
-    if target_ci == "github-actions" and source_ci.lower() in ["travis-ci", "travis ci"]:
-        # Travis CI specific keywords that shouldn't be in GitHub Actions
-        travis_keywords = ["language:", "dist:", "before_script:", "after_failure:", "skip_cleanup:"]
-        if any(keyword in output_lower for keyword in travis_keywords):
-            return True
+    # Define keywords specific to each CI platform that shouldn't appear in GitHub Actions output
+    ci_specific_keywords = {
+        "travis-ci": ["language:", "dist:", "before_script:", "after_failure:", "skip_cleanup:", "addons:"],
+        "travis ci": ["language:", "dist:", "before_script:", "after_failure:", "skip_cleanup:", "addons:"],
+        "circleci": ["version: 2", "workflows:", "orbs:", "executors:", "persist_to_workspace:", "attach_workspace:"],
+        "gitlab ci": ["stages:", "before_script:", "after_script:", "only:", "except:", "artifacts:\n    paths:"],
+        "gitlab-ci": ["stages:", "before_script:", "after_script:", "only:", "except:", "artifacts:\n    paths:"],
+        "azure pipelines": ["trigger:", "pool:", "vmimage:", "stages:", "- task:", "displayname:"],
+        "azure-pipelines": ["trigger:", "pool:", "vmimage:", "stages:", "- task:", "displayname:"],
+        "jenkins": ["pipeline {", "agent {", "stages {", "stage(", "steps {", "sh '"],
+        "jenkinsfile": ["pipeline {", "agent {", "stages {", "stage(", "steps {", "sh '"],
+        "appveyor": ["version:", "image:", "build_script:", "test_script:", "deploy_script:", "artifacts:"],
+        "bitbucket pipelines": ["pipelines:", "default:", "- step:", "caches:", "definitions:"],
+        "bitbucket-pipelines": ["pipelines:", "default:", "- step:", "caches:", "definitions:"],
+        "semaphore": ["version: v1", "blocks:", "- name:", "task:", "prologue:", "epilogue:"],
+        "cirrus ci": ["task:", "container:", "script:", "cache:", "environment:"],
+        "cirrus-ci": ["task:", "container:", "script:", "cache:", "environment:"],
+    }
+    
+    # Check if output contains source CI-specific keywords when converting TO GitHub Actions
+    if target_ci == "github-actions":
+        source_lower = source_ci.lower()
+        if source_lower in ci_specific_keywords:
+            keywords = ci_specific_keywords[source_lower]
+            matching_keywords = [kw for kw in keywords if kw in output_lower]
+            # If more than 2 source-specific keywords found, likely wrong format
+            if len(matching_keywords) >= 2:
+                return True
     
     # If converting TO GitHub Actions, it MUST have these keywords
     if target_ci == "github-actions":
@@ -391,8 +430,10 @@ def convert_pipeline_ollama(source_ci: str, target_ci: str, content: str) -> str
 
 
 def _build_semantic_verification_prompt(source_config: str, generated_config: str, source_ci: str, target_ci: str) -> str:
-    """Build prompt for semantic verification of CI/CD migration"""
-    return f"""You are a CI/CD migration verification expert. Verify that the generated {target_ci} config captures the ESSENTIAL functionality from the source.
+    """Build prompt for semantic verification of CI/CD migration - works for any CI platform"""
+    return f"""You are a CI/CD migration verification expert. Check for BOTH missing features AND hallucinated additions.
+
+This migration is from {source_ci} to {target_ci}.
 
 ORIGINAL {source_ci.upper()} CONFIG:
 ---
@@ -404,39 +445,79 @@ GENERATED {target_ci.upper()} CONFIG:
 {generated_config}
 ---
 
-=== VERIFICATION RULES ===
+=== VERIFICATION TASK ===
+Check THREE things:
+1. Source functionality is preserved (nothing critical missing)
+2. No HALLUCINATED/INVENTED steps were added (nothing fabricated)
+3. VERSION NUMBERS are preserved when converting Docker images to setup actions
 
-✅ PASS if these are preserved from source:
-- Shell commands / run steps (exact or equivalent)
-- Docker image / container (if specified in source)
-- Environment variables defined in source
-- Services (mysql, redis, etc.) if in source
-- Basic trigger (push/PR) - exact branch matching not required
+=== CRITICAL: VERSION PRESERVATION ===
+When source uses a Docker image with a specific version (e.g., cimg/go:1.12.9, python:3.9, node:18):
+- The generated config MUST specify that exact version
+- Example: docker image `cimg/go:1.12.9` → setup-go MUST have `go-version: '1.12.9'`
+- Example: docker image `python:3.9` → setup-python MUST have `python-version: '3.9'`
+- If version is NOT specified in generated setup action → FAIL and list in missing_features
 
-✅ PASS even if generated config ADDS:
-- Checkout step (actions/checkout) - this is standard practice
-- Setup steps (setup-node, setup-java) - often implied
-- Extra triggers (adding pull_request to push is fine)
+=== WHAT TO CHECK (CI Platform Agnostic) ===
+✓ Shell commands / scripts - are they preserved?
+✓ Environment variables - are they all present?
+✓ Services (databases, caches) - preserved if in source?
+✓ Docker images / containers - either kept as container OR converted with EXACT version
+✓ Build matrix / strategy - preserved if in source?
+✓ Triggers (push, PR, schedule, tags) - approximately equivalent?
+✓ Artifacts upload/download - preserved if in source?
+✓ Cache configurations - preserved if explicitly in source?
 
-❌ FAIL only if source functionality is MISSING:
-- A shell command from source is not in generated
-- A required service from source is missing
-- Environment variables from source are missing
+=== ALLOWED ADDITIONS (NOT hallucinations - do NOT list these) ===
+✅ actions/checkout@v4 - REQUIRED for GitHub Actions, NEVER list as hallucination
+✅ actions/setup-node@v4, actions/setup-python@v4, actions/setup-go@v4, etc. - IF source uses that language AND version is specified
+✅ Minor trigger additions (e.g., adding pull_request to push)
+✅ Standard runner setup implied by source platform
+✅ container: with same image as source docker config
 
-=== IMPORTANT ===
-Be LENIENT. The goal is functional equivalence, not exact matching.
-If the source is simple (e.g., just echo commands), the output should pass easily.
-Adding standard CI practices (checkout, setup) is NOT a failure.
+IMPORTANT: Do NOT include checkout or setup actions in hallucinated_steps list!
 
+=== FAIL CONDITIONS (CRITICAL - must fail for these) ===
+❌ FAIL if SOURCE functionality is MISSING from generated
+❌ FAIL if Docker image version is NOT preserved (e.g., source has go:1.12.9, generated has setup-go WITHOUT go-version: '1.12.9')
+❌ FAIL if generated has INVENTED steps not in source (excluding checkout/setup):
+   - Random tool checks like 'which X' or 'verify X' when not in source
+   - Test commands (npm test, pytest, mvn test) when no tests in source
+   - Build commands (make, gradle, maven) when not in source
+   - Deploy steps when no deployment in source
+   - Lint/format steps when not in source
+   - Any commands referencing tools/programs not in source config
+
+=== ADDITIONAL STEPS DETECTION ===
+Compare functional steps (NOT checkout/setup):
+- Count functional steps in source (run commands, scripts)
+- Count functional steps in generated (run commands, scripts - NOT checkout/setup actions)
+- If generated has MORE run/script steps than source → list them as additional
+
+Examples of FAILURES:
+- Source: `docker: cimg/go:1.12.9` → Generated: `setup-go@v4` WITHOUT go-version → FAIL (missing version)
+- Source: `echo "Hello"` → Generated adds: `npm test`, `make build` → FAIL (hallucinated)
+- Source: just docker image → Generated adds: `which python`, `verify pip` → FAIL (hallucinated)
+
+Examples that are OK:
+- Source: `docker: cimg/go:1.12.9` → Generated: `setup-go@v4` WITH `go-version: '1.12.9'` → OK
+- Source: uses Go → Generated has: actions/checkout@v4, actions/setup-go@v4 → OK (if version preserved)
+
+=== RESPONSE FORMAT ===
 RESPOND WITH ONLY THIS JSON (no markdown, no explanation):
 {{
   "passed": true or false,
   "reasons": ["short reason 1", "short reason 2"],
-  "missing_features": [],
+  "missing_features": ["list any source features missing - INCLUDING missing version numbers like 'Go version 1.12.9 not specified'"],
+  "hallucinated_steps": ["list ONLY invented run/script steps - NOT checkout or setup actions"],
   "confidence": 0.0 to 1.0
 }}
 
-Set "passed": true if source functionality is preserved. Extra steps are OK."""
+Set "passed": true ONLY if:
+1. Source functionality is preserved
+2. No invented steps added
+3. Version numbers from Docker images are preserved in setup actions
+Do NOT fail just because checkout or setup actions were added - those are required."""
 
 
 def semantic_verify_migration(
@@ -545,11 +626,21 @@ def semantic_verify_migration(
         
         result = json.loads(result_text)
         
-        # Ensure required fields
+        # Ensure required fields - include hallucinated_steps in response
+        hallucinated = result.get("hallucinated_steps", [])
+        missing = result.get("missing_features", [])
+        
+        # If there are hallucinated steps, fail the verification
+        passed = result.get("passed", False)
+        if hallucinated and passed:
+            print(f"[DOUBLE-CHECK] Hallucinated steps detected, overriding to FAIL: {hallucinated}")
+            passed = False
+        
         return {
-            "passed": result.get("passed", False),
+            "passed": passed,
             "reasons": result.get("reasons", []),
-            "missing_features": result.get("missing_features", []),
+            "missing_features": missing,
+            "hallucinated_steps": hallucinated,
             "confidence": result.get("confidence", 0.5),
         }
         

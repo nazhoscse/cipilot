@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from models import ConversionRequest, ConversionResponse, ValidateGithubActionsRequest, ValidationResult, RetryConversionRequest
 from llm_converter import convert_pipeline, semantic_verify_migration
+from agentic_pipeline import run_conversion_pipeline
 import uvicorn
 import tempfile
 import subprocess
@@ -68,31 +69,41 @@ def _run_actionlint(yaml_text: str) -> tuple[bool, str | None]:
             )
         output = (proc.stdout or "") + (proc.stderr or "")
         
-        # Analyze severity - only pass if ALL issues are info-level shellcheck warnings
+        # Analyze severity - determine what's a hard failure vs a soft warning
         if output:
-            # Check for actual errors (syntax-check, expression, etc.)
+            # Check for actual breaking errors - these should ALWAYS fail
             has_syntax_error = '[syntax-check]' in output
             has_expression_error = '[expression]' in output
             has_type_error = '[type-check]' in output
-            has_severity_error = ':error:' in output.lower()
-            has_severity_warning = ':warning:' in output.lower()
+            has_runner_label_error = '[runner-label]' in output  # Invalid runner name
+            has_action_error = '[action]' in output  # Action-related errors
             
-            # Only consider it info-level if it's ONLY shellcheck info warnings
+            # Check if it's ONLY "action is too old" warning (the only non-blocking case)
+            is_only_action_too_old = (
+                ('action is too old' in output.lower() or 'is too old to run' in output.lower()) and
+                not has_syntax_error and
+                not has_expression_error and
+                not has_type_error and
+                not has_runner_label_error
+            )
+            
+            # Check for shellcheck info-only (also non-blocking)
             is_only_shellcheck_info = (
                 ':info:' in output.lower() and 
                 '[shellcheck]' in output and
                 not has_syntax_error and
                 not has_expression_error and
                 not has_type_error and
-                not has_severity_error and
-                not has_severity_warning
+                not has_runner_label_error and
+                not has_action_error
             )
             
-            if is_only_shellcheck_info:
-                # Info-level shellcheck suggestions don't fail validation
-                severity_note = "\n\n[Note: Only INFO-level shellcheck suggestions found. These are style recommendations, not errors.]"
+            # Only these specific cases are non-blocking
+            if is_only_action_too_old or is_only_shellcheck_info:
+                severity_note = "\n\n[Note: Non-blocking warnings found. Consider updating action versions to @v4.]"
                 return True, (output.strip() + severity_note)
             
+            # Everything else fails
             return proc.returncode == 0, output.strip() or None
         
         return proc.returncode == 0, output.strip() or None
@@ -152,17 +163,44 @@ def _semantic_double_check(
     passed = result.get("passed", False)
     reasons = result.get("reasons", [])
     missing = result.get("missing_features", [])
+    hallucinated = result.get("hallucinated_steps", [])
     confidence = result.get("confidence", 0.0)
+    
+    # Filter out allowed additions that shouldn't be considered hallucinations
+    allowed_additions = [
+        'actions/checkout', 'checkout', 'actions/checkout@v4', 'actions/checkout@v3',
+        'actions/setup-', 'setup-node', 'setup-python', 'setup-java', 'setup-go',
+    ]
+    filtered_hallucinated = [
+        h for h in hallucinated 
+        if not any(allowed.lower() in h.lower() for allowed in allowed_additions)
+    ]
+    
+    # If hallucinations were filtered out, update passed status
+    if hallucinated and not filtered_hallucinated:
+        print(f"[DOUBLE-CHECK] Filtered out allowed additions from hallucinated list: {hallucinated}")
+        passed = True  # Override to pass since remaining issues were allowed additions
     
     print(f"[DOUBLE-CHECK] Result: passed={passed}, confidence={confidence}")
     print(f"[DOUBLE-CHECK] Reasons: {reasons}")
     if missing:
         print(f"[DOUBLE-CHECK] Missing features: {missing}")
+    if filtered_hallucinated:
+        print(f"[DOUBLE-CHECK] Additional steps not in source: {filtered_hallucinated}")
     
-    # Combine reasons with missing features for display
+    # Build user-friendly reasons (avoid "HALLUCINATED" terminology)
     all_reasons = list(reasons)
+    if filtered_hallucinated:
+        all_reasons.append(f"Additional steps not in source: {', '.join(filtered_hallucinated)}")
     if missing:
-        all_reasons.append(f"Missing features: {', '.join(missing)}")
+        all_reasons.append(f"Missing from source: {', '.join(missing)}")
+        # If there are missing features, we should fail the check
+        if not filtered_hallucinated:
+            # Only fail for missing features if they seem significant
+            significant_missing = [m for m in missing if any(kw in m.lower() for kw in ['docker', 'container', 'image', 'service', 'environment', 'env', 'command', 'script', 'step'])]
+            if significant_missing:
+                print(f"[DOUBLE-CHECK] Significant missing features detected, failing: {significant_missing}")
+                passed = False
     if confidence > 0:
         all_reasons.append(f"Confidence: {confidence:.0%}")
     
@@ -171,7 +209,10 @@ def _semantic_double_check(
 
 @app.post("/validate-github-actions", response_model=ValidationResult)
 async def validate_github_actions(request: ValidateGithubActionsRequest):
+    print(f"[VALIDATE] Received request - yaml length: {len(request.yaml)}, has originalConfig: {bool(request.originalConfig)}, has llmSettings: {bool(request.llmSettings)}")
+    
     validation = _validate_github_actions_yaml(request.yaml)
+    print(f"[VALIDATE] YAML ok: {validation.yamlOk}, Lint ok: {validation.actionlintOk}")
     
     # Agentic Double Check - only if YAML/lint passed AND we have original config
     if validation.yamlOk and validation.actionlintOk and request.originalConfig:
@@ -181,7 +222,7 @@ async def validate_github_actions(request: ValidateGithubActionsRequest):
         base_url = (llm.baseUrl if llm else None)
         api_key = (llm.apiKey if llm else None)
         
-        print("[VALIDATE DOUBLE-CHECK] Running semantic verification...")
+        print(f"[VALIDATE DOUBLE-CHECK] Running semantic verification with {provider}/{model}...")
         double_check_ok, double_check_reasons = _semantic_double_check(
             source_config=request.originalConfig,
             generated_config=request.yaml,
@@ -195,7 +236,12 @@ async def validate_github_actions(request: ValidateGithubActionsRequest):
         validation.doubleCheckOk = double_check_ok
         validation.doubleCheckReasons = double_check_reasons
         validation.doubleCheckSkipped = False
+        print(f"[VALIDATE DOUBLE-CHECK] Result: passed={double_check_ok}")
     elif not (validation.yamlOk and validation.actionlintOk):
+        print(f"[VALIDATE] Skipping Double Check - YAML/lint failed")
+        validation.doubleCheckSkipped = True
+    else:
+        print(f"[VALIDATE] Skipping Double Check - no originalConfig provided")
         validation.doubleCheckSkipped = True
     
     return validation
@@ -374,96 +420,46 @@ async def convert_cicd(request: ConversionRequest):
         else:
             src_display_name = src_platform  # Fallback
         
-        converted = convert_pipeline(
-            provider=provider,
-            model=model,
-            source_ci=src_display_name,
-            target_ci=target_platform,
-            content=pipeline_content,
-            base_url=base_url,
-            api_key=api_key,
-        )
-
-        attempts = 1
-        validation = None
+        # Use LangGraph agentic pipeline for conversion with automatic retry
         if target_platform == 'github-actions':
-            validation = _validate_github_actions_yaml(converted)
-            if (not validation.yamlOk) or (not validation.actionlintOk):
-                attempts = 2
-                feedback_parts = []
-                if not validation.yamlOk:
-                    feedback_parts.append(f"YAML parse error: {validation.yamlError}")
-                if not validation.actionlintOk:
-                    feedback_parts.append(f"actionlint output: {validation.actionlintOutput}")
-                feedback = "\n".join([p for p in feedback_parts if p])
-
-                converted_retry = convert_pipeline(
-                    provider=provider,
-                    model=model,
-                    source_ci=src_platform,
-                    target_ci=target_platform,
-                    content=pipeline_content,
-                    base_url=base_url,
-                    api_key=api_key,
-                    validation_feedback=feedback,
-                )
-                converted = converted_retry
-                validation = _validate_github_actions_yaml(converted)
+            print("[LANGGRAPH] Using agentic pipeline for GitHub Actions conversion")
             
-            # Agentic Double Check - only if YAML and lint both passed
-            if validation.yamlOk and validation.actionlintOk:
-                print("[DOUBLE-CHECK] YAML and lint passed, performing semantic verification...")
-                double_check_ok, double_check_reasons = _semantic_double_check(
-                    source_config=pipeline_content,
-                    generated_config=converted,
-                    source_ci=src_display_name,
-                    target_ci=target_platform,
-                    provider=provider,
-                    model=model,
-                    base_url=base_url,
-                    api_key=api_key,
-                )
-                validation.doubleCheckOk = double_check_ok
-                validation.doubleCheckReasons = double_check_reasons
-                validation.doubleCheckSkipped = False
-                
-                # If double check failed, attempt one more retry with semantic feedback
-                if not double_check_ok and attempts < 3:
-                    attempts += 1
-                    semantic_feedback = (
-                        "SEMANTIC VERIFICATION FAILED:\n"
-                        + "\n".join(f"- {r}" for r in double_check_reasons)
-                        + "\n\nPlease fix the generated GitHub Actions YAML to address these semantic issues."
-                    )
-                    
-                    converted_retry = convert_pipeline(
-                        provider=provider,
-                        model=model,
-                        source_ci=src_platform,
-                        target_ci=target_platform,
-                        content=pipeline_content,
-                        base_url=base_url,
-                        api_key=api_key,
-                        validation_feedback=semantic_feedback,
-                    )
-                    converted = converted_retry
-                    validation = _validate_github_actions_yaml(converted)
-                    
-                    # Re-run double check on retry
-                    if validation.yamlOk and validation.actionlintOk:
-                        double_check_ok, double_check_reasons = _semantic_double_check(
-                            source_config=pipeline_content,
-                            generated_config=converted,
-                            source_ci=src_display_name,
-                            target_ci=target_platform,
-                            provider=provider,
-                            model=model,
-                            base_url=base_url,
-                            api_key=api_key,
-                        )
-                        validation.doubleCheckOk = double_check_ok
-                        validation.doubleCheckReasons = double_check_reasons
-                        validation.doubleCheckSkipped = False
+            result = run_conversion_pipeline(
+                source_config=pipeline_content,
+                source_ci=src_display_name,
+                target_ci=target_platform,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+                max_attempts=3,
+            )
+            
+            converted = result['generated_yaml']
+            attempts = result['attempts']
+            
+            validation = ValidationResult(
+                yamlOk=result['yaml_ok'],
+                yamlError=result['yaml_error'],
+                actionlintOk=result['actionlint_ok'],
+                actionlintOutput=result['actionlint_output'],
+                doubleCheckOk=result['double_check_ok'],
+                doubleCheckReasons=result['double_check_reasons'],
+                doubleCheckSkipped=result['double_check_skipped'],
+            )
+        else:
+            # Non-GitHub Actions target - use simple conversion (no LangGraph)
+            converted = convert_pipeline(
+                provider=provider,
+                model=model,
+                source_ci=src_display_name,
+                target_ci=target_platform,
+                content=pipeline_content,
+                base_url=base_url,
+                api_key=api_key,
+            )
+            attempts = 1
+            validation = None
             
         return ConversionResponse(
             convertedConfig=converted,
