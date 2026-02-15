@@ -85,7 +85,7 @@ export function Header({ onMenuClick, showMenuButton = false }: HeaderProps) {
                 <Settings className="w-5 h-5" />
               </Button>
               <a
-                href="https://github.com"
+                href="https://github.com/nazhoscse/cipilot"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hidden sm:flex"
