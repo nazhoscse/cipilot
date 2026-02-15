@@ -1,10 +1,3 @@
-# Writing/Documentation
-writing/
-
-# Internal documentation (CONFIDENTIAL - do not commit)
-INTERNAL_ANALYTICS.md
-RENDER_DATABASE_PERSISTENCE_TROUBLESHOOTING.md
-
 # Python
 __pycache__/
 *.py[cod]
@@ -118,3 +111,8 @@ tmp/
 backend/data/*.db
 backend/data/*.db-shm
 backend/data/*.db-wal
+
+# ignore
+writing/
+INTERNAL_ANALYTICS.md
+RENDER_DATABASE_PERSISTENCE_TROUBLESHOOTING.md
