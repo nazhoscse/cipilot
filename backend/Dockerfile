@@ -3,11 +3,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies (for actionlint)
+# Install system dependencies (for actionlint and sqlite3)
 RUN apt-get update && apt-get install -y \
   ca-certificates \
   curl \
   tar \
+  sqlite3 \
   && rm -rf /var/lib/apt/lists/*
 
 # Install actionlint

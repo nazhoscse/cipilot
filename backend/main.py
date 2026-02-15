@@ -804,6 +804,118 @@ async def create_analytics_session(http_request: Request):
     )
     
     return {"session_id": session_id, "user_id": user_id}
+
+
+@app.get("/analytics/detections")
+async def get_detections(limit: int = 20):
+    """Get recent detection logs"""
+    if not await analytics_service.health_check():
+        raise HTTPException(status_code=503, detail="Analytics service unavailable")
+    
+    try:
+        from database.sqlite_repository import SQLiteRepository
+        repo = SQLiteRepository()
+        await repo.initialize()
+        
+        async with repo._connection.execute(
+            """SELECT id, user_id, session_id, repo_full_name, detected_services, 
+                      detection_count, created_at 
+               FROM detection_logs 
+               ORDER BY created_at DESC 
+               LIMIT ?""",
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        
+        import json
+        detections = []
+        for row in rows:
+            detections.append({
+                "id": row[0],
+                "user_id": row[1],
+                "session_id": row[2],
+                "repo_full_name": row[3],
+                "detected_services": json.loads(row[4]) if row[4] else [],
+                "detection_count": row[5],
+                "created_at": row[6]
+            })
+        
+        return {"detections": detections, "count": len(detections)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching detections: {str(e)}")
+
+
+@app.get("/analytics/migrations")
+async def get_migrations(limit: int = 20):
+    """Get recent migration logs"""
+    if not await analytics_service.health_check():
+        raise HTTPException(status_code=503, detail="Analytics service unavailable")
+    
+    try:
+        from database.sqlite_repository import SQLiteRepository
+        repo = SQLiteRepository()
+        await repo.initialize()
+        
+        async with repo._connection.execute(
+            """SELECT id, user_id, session_id, repo_full_name, target_platform, 
+                      final_status, attempts, created_at 
+               FROM migration_logs 
+               ORDER BY created_at DESC 
+               LIMIT ?""",
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        
+        migrations = []
+        for row in rows:
+            migrations.append({
+                "id": row[0],
+                "user_id": row[1],
+                "session_id": row[2],
+                "repo_full_name": row[3],
+                "target_platform": row[4],
+                "final_status": row[5],
+                "attempts": row[6],
+                "created_at": row[7]
+            })
+        
+        return {"migrations": migrations, "count": len(migrations)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching migrations: {str(e)}")
+
+
+@app.get("/analytics/sessions")
+async def get_sessions(limit: int = 20):
+    """Get recent user sessions"""
+    if not await analytics_service.health_check():
+        raise HTTPException(status_code=503, detail="Analytics service unavailable")
+    
+    try:
+        from database.sqlite_repository import SQLiteRepository
+        repo = SQLiteRepository()
+        await repo.initialize()
+        
+        async with repo._connection.execute(
+            """SELECT id, user_id, created_at, last_activity_at 
+               FROM user_sessions 
+               ORDER BY last_activity_at DESC 
+               LIMIT ?""",
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        
+        sessions = []
+        for row in rows:
+            sessions.append({
+                "id": row[0],
+                "user_id": row[1],
+                "created_at": row[2],
+                "last_activity_at": row[3]
+            })
+        
+        return {"sessions": sessions, "count": len(sessions)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching sessions: {str(e)}")
         
 
 if __name__ == "__main__":
