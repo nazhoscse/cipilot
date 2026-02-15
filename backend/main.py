@@ -763,10 +763,21 @@ async def convert_cicd(request: ConversionRequest, http_request: Request, backgr
 @app.get("/analytics/health")
 async def analytics_health():
     """Check if analytics service is healthy"""
+    import os
     healthy = await analytics_service.health_check()
+    
+    # Show which database path is being used
+    db_path_env = os.getenv('DATABASE_PATH', 'Not set')
+    if analytics_service._repository:
+        actual_path = getattr(analytics_service._repository, 'db_path', 'Unknown')
+    else:
+        actual_path = 'Repository not initialized'
+    
     return {
         "status": "healthy" if healthy else "unavailable",
         "service": "analytics",
+        "database_env_var": db_path_env,
+        "actual_database_path": actual_path,
     }
 
 
