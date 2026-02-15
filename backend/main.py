@@ -818,23 +818,39 @@ async def create_analytics_session(http_request: Request):
 
 
 @app.get("/analytics/detections")
-async def get_detections(limit: int = 20):
-    """Get recent detection logs"""
+async def get_detections(page: int = 1, limit: int = 20):
+    """Get recent detection logs with pagination"""
     if not await analytics_service.health_check():
         raise HTTPException(status_code=503, detail="Analytics service unavailable")
+    
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be >= 1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
     
     try:
         from database.sqlite_repository import SQLiteRepository
         repo = SQLiteRepository()
         await repo.initialize()
         
+        # Get total count
+        async with repo._connection.execute(
+            "SELECT COUNT(*) FROM detection_logs"
+        ) as cursor:
+            row = await cursor.fetchone()
+            total_count = row[0]
+        
+        # Calculate offset
+        offset = (page - 1) * limit
+        
+        # Get paginated data
         async with repo._connection.execute(
             """SELECT id, user_id, session_id, repo_full_name, detected_services, 
                       detection_count, created_at 
                FROM detection_logs 
                ORDER BY created_at DESC 
-               LIMIT ?""",
-            (limit,)
+               LIMIT ? OFFSET ?""",
+            (limit, offset)
         ) as cursor:
             rows = await cursor.fetchall()
         
@@ -851,29 +867,57 @@ async def get_detections(limit: int = 20):
                 "created_at": row[6]
             })
         
-        return {"detections": detections, "count": len(detections)}
+        total_pages = (total_count + limit - 1) // limit  # Ceiling division
+        
+        return {
+            "detections": detections,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total_records": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching detections: {str(e)}")
 
 
 @app.get("/analytics/migrations")
-async def get_migrations(limit: int = 20):
-    """Get recent migration logs"""
+async def get_migrations(page: int = 1, limit: int = 20):
+    """Get recent migration logs with pagination"""
     if not await analytics_service.health_check():
         raise HTTPException(status_code=503, detail="Analytics service unavailable")
+    
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be >= 1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
     
     try:
         from database.sqlite_repository import SQLiteRepository
         repo = SQLiteRepository()
         await repo.initialize()
         
+        # Get total count
+        async with repo._connection.execute(
+            "SELECT COUNT(*) FROM migration_logs"
+        ) as cursor:
+            row = await cursor.fetchone()
+            total_count = row[0]
+        
+        # Calculate offset
+        offset = (page - 1) * limit
+        
+        # Get paginated data
         async with repo._connection.execute(
             """SELECT id, user_id, session_id, repo_full_name, target_platform, 
                       final_status, attempts, created_at 
                FROM migration_logs 
                ORDER BY created_at DESC 
-               LIMIT ?""",
-            (limit,)
+               LIMIT ? OFFSET ?""",
+            (limit, offset)
         ) as cursor:
             rows = await cursor.fetchall()
         
@@ -890,28 +934,56 @@ async def get_migrations(limit: int = 20):
                 "created_at": row[7]
             })
         
-        return {"migrations": migrations, "count": len(migrations)}
+        total_pages = (total_count + limit - 1) // limit
+        
+        return {
+            "migrations": migrations,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total_records": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching migrations: {str(e)}")
 
 
 @app.get("/analytics/sessions")
-async def get_sessions(limit: int = 20):
-    """Get recent user sessions"""
+async def get_sessions(page: int = 1, limit: int = 20):
+    """Get recent user sessions with pagination"""
     if not await analytics_service.health_check():
         raise HTTPException(status_code=503, detail="Analytics service unavailable")
+    
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be >= 1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
     
     try:
         from database.sqlite_repository import SQLiteRepository
         repo = SQLiteRepository()
         await repo.initialize()
         
+        # Get total count
+        async with repo._connection.execute(
+            "SELECT COUNT(*) FROM user_sessions"
+        ) as cursor:
+            row = await cursor.fetchone()
+            total_count = row[0]
+        
+        # Calculate offset
+        offset = (page - 1) * limit
+        
+        # Get paginated data
         async with repo._connection.execute(
             """SELECT id, user_id, created_at, last_activity_at 
                FROM user_sessions 
                ORDER BY last_activity_at DESC 
-               LIMIT ?""",
-            (limit,)
+               LIMIT ? OFFSET ?""",
+            (limit, offset)
         ) as cursor:
             rows = await cursor.fetchall()
         
@@ -924,7 +996,19 @@ async def get_sessions(limit: int = 20):
                 "last_activity_at": row[3]
             })
         
-        return {"sessions": sessions, "count": len(sessions)}
+        total_pages = (total_count + limit - 1) // limit
+        
+        return {
+            "sessions": sessions,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total_records": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching sessions: {str(e)}")
         
