@@ -762,7 +762,7 @@ async def convert_cicd(request: ConversionRequest, http_request: Request, backgr
 # Analytics endpoints
 @app.get("/analytics/health")
 async def analytics_health():
-    """Check if analytics service is healthy"""
+    """Check if analytics service is healthy and show database diagnostics"""
     import os
     healthy = await analytics_service.health_check()
     
@@ -773,11 +773,35 @@ async def analytics_health():
     else:
         actual_path = 'Repository not initialized'
     
+    # Disk diagnostics
+    disk_info = {}
+    if actual_path != 'Repository not initialized' and actual_path != 'Unknown':
+        try:
+            db_dir = os.path.dirname(actual_path)
+            disk_info = {
+                "directory_exists": os.path.exists(db_dir),
+                "directory_writable": os.access(db_dir, os.W_OK) if os.path.exists(db_dir) else False,
+                "file_exists": os.path.exists(actual_path),
+                "file_size_bytes": os.path.getsize(actual_path) if os.path.exists(actual_path) else 0,
+                "directory_permissions": oct(os.stat(db_dir).st_mode)[-3:] if os.path.exists(db_dir) else None,
+            }
+            
+            # Check if we can list the directory
+            if os.path.exists(db_dir):
+                try:
+                    files_in_dir = os.listdir(db_dir)
+                    disk_info["files_in_directory"] = files_in_dir
+                except Exception as e:
+                    disk_info["directory_listing_error"] = str(e)
+        except Exception as e:
+            disk_info["error"] = str(e)
+    
     return {
         "status": "healthy" if healthy else "unavailable",
         "service": "analytics",
         "database_env_var": db_path_env,
         "actual_database_path": actual_path,
+        "disk_diagnostics": disk_info,
     }
 
 

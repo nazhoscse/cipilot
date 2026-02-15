@@ -34,6 +34,17 @@ class SQLiteRepository(BaseRepository):
         db_dir = os.path.dirname(self.db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
+            print(f"[DATABASE] Created directory: {db_dir}")
+        
+        # Check if database file already exists
+        db_exists = os.path.exists(self.db_path)
+        db_size = os.path.getsize(self.db_path) if db_exists else 0
+        
+        print(f"[DATABASE] Initializing at: {self.db_path}")
+        print(f"[DATABASE] Directory exists: {os.path.exists(db_dir)}")
+        print(f"[DATABASE] Database file exists: {db_exists}")
+        print(f"[DATABASE] Database file size: {db_size} bytes")
+        print(f"[DATABASE] Directory permissions: {oct(os.stat(db_dir).st_mode)[-3:] if os.path.exists(db_dir) else 'N/A'}")
         
         self._connection = await aiosqlite.connect(self.db_path)
         self._connection.row_factory = aiosqlite.Row
@@ -46,7 +57,14 @@ class SQLiteRepository(BaseRepository):
         await self._run_migrations()
         await self._connection.commit()
         
-        print(f"[DATABASE] SQLite initialized at: {self.db_path}")
+        # Log table count after initialization
+        async with self._connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+        ) as cursor:
+            table_count = (await cursor.fetchone())[0]
+        
+        print(f"[DATABASE] Initialization complete: {table_count} tables created")
+        print(f"[DATABASE] Final file size: {os.path.getsize(self.db_path)} bytes")
     
     async def _create_tables(self) -> None:
         """Create database schema"""
