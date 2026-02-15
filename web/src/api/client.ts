@@ -1,5 +1,6 @@
 import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import type { APIError } from '../types/api'
+import { getAnalyticsHeaders } from '../utils/analytics'
 
 // Get base URL from environment or use default
 const getBaseUrl = (): string => {
@@ -19,10 +20,14 @@ export const apiClient: AxiosInstance = axios.create({
   },
 })
 
-// Request interceptor (can add auth headers here)
+// Request interceptor - add analytics headers
 apiClient.interceptors.request.use(
   (config) => {
-    // Could add auth headers from settings if needed
+    // Add anonymous analytics headers (no credentials!)
+    const analyticsHeaders = getAnalyticsHeaders()
+    Object.entries(analyticsHeaders).forEach(([key, value]) => {
+      config.headers.set(key, value)
+    })
     return config
   },
   (error) => {

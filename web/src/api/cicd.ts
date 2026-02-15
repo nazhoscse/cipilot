@@ -41,6 +41,28 @@ export const cicdApi = {
   },
 
   /**
+   * Detect CI/CD platform from YAML content
+   */
+  async detectCI(
+    yamlContent: string, 
+    filePath?: string,
+    repoOwner?: string,
+    repoName?: string,
+    repoBranch?: string,
+    detectedServices?: string[]
+  ): Promise<{ detected_platforms: string[]; confidence: number; file_path?: string }> {
+    const response = await apiClient.post<{ detected_platforms: string[]; confidence: number; file_path?: string }>('/detect-ci', {
+      yaml_content: yamlContent,
+      file_path: filePath,
+      repo_owner: repoOwner,
+      repo_name: repoName,
+      repo_branch: repoBranch,
+      detected_services: detectedServices,
+    })
+    return response.data
+  },
+
+  /**
    * Health check endpoint
    */
   async healthCheck(): Promise<{ status: string; message: string }> {

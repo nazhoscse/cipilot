@@ -6,6 +6,7 @@ import { Button } from '../components/common'
 import { useMigration } from '../context/MigrationContext'
 import { useSettings } from '../context/SettingsContext'
 import { useToast } from '../context/ToastContext'
+import { cicdApi } from '../api'
 import type { Repository } from '../types/api'
 import type { DetectedService, MigrationHistoryItem } from '../types/migration'
 
@@ -207,6 +208,21 @@ export function HomePage() {
             'CI/CD detected',
             `Found ${detectedServices.length} service${detectedServices.length > 1 ? 's' : ''}`
           )
+          
+          // Log detection to backend analytics once with all detected services (fire-and-forget)
+          const allServiceNames = detectedServices.map(s => s.name)
+          const firstConfigKey = Object.keys(fetchedConfigs)[0]
+          const firstYamlContent = fetchedConfigs[firstConfigKey] || ''
+          cicdApi.detectCI(
+            firstYamlContent, 
+            detectedServices[0]?.path,
+            repoWithUrl.owner,
+            repoWithUrl.name,
+            repoWithUrl.branch,
+            allServiceNames
+          ).catch(err => {
+            console.warn('Failed to log detection to analytics:', err)
+          })
         }
       } catch (error) {
         if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {

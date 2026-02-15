@@ -57,3 +57,20 @@ class ConversionResponse(BaseModel):
     modelUsed: Optional[str] = None
     attempts: int = 1
     validation: Optional[ValidationResult] = None
+
+
+class DetectionRequest(BaseModel):
+    """Request to detect CI platform from YAML content"""
+    yaml_content: str
+    file_path: Optional[str] = None  # Optional file path for context
+    repo_owner: Optional[str] = None
+    repo_name: Optional[str] = None
+    repo_branch: Optional[str] = None
+    detected_services: Optional[List[str]] = None  # Pre-detected service names from frontend
+
+
+class DetectionResponse(BaseModel):
+    """Response with detected CI platform(s)"""
+    detected_platforms: List[str]
+    confidence: Optional[float] = None
+    file_path: Optional[str] = None

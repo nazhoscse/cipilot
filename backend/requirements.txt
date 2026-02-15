@@ -5,3 +5,5 @@ requests
 pyyaml
 langgraph
 langchain-core
+aiosqlite
+user-agents

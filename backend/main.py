@@ -1,19 +1,45 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from models import ConversionRequest, ConversionResponse, ValidateGithubActionsRequest, ValidationResult, RetryConversionRequest
+from contextlib import asynccontextmanager
+from models import ConversionRequest, ConversionResponse, ValidateGithubActionsRequest, ValidationResult, RetryConversionRequest, DetectionRequest, DetectionResponse
 from llm_converter import convert_pipeline, semantic_verify_migration
 from agentic_pipeline import run_conversion_pipeline
+from analytics import analytics_service
 import uvicorn
 import tempfile
 import subprocess
 import requests
+import time
+import re
+from typing import Optional, List
 
 try:
     import yaml  # PyYAML
 except Exception:  # pragma: no cover
     yaml = None
 
-app = FastAPI(title="CI/CD Converter API")
+
+# Lifespan for startup/shutdown events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize analytics
+    try:
+        await analytics_service.initialize()
+        print("[STARTUP] Analytics service initialized")
+    except Exception as e:
+        print(f"[STARTUP] Analytics initialization failed (non-critical): {e}")
+    
+    yield
+    
+    # Shutdown: Close analytics
+    try:
+        await analytics_service.close()
+        print("[SHUTDOWN] Analytics service closed")
+    except Exception as e:
+        print(f"[SHUTDOWN] Error closing analytics: {e}")
+
+
+app = FastAPI(title="CI/CD Converter API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,6 +57,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Helper to extract analytics headers from request
+def _get_analytics_context(request: Request) -> dict:
+    """Extract anonymous analytics context from request headers"""
+    return {
+        'user_id': request.headers.get('X-Analytics-User-ID'),
+        'session_id': request.headers.get('X-Analytics-Session-ID'),  # Client-provided session hint
+        'ip_address': request.headers.get('X-Forwarded-For', request.client.host if request.client else None),
+        'user_agent': request.headers.get('User-Agent'),
+        'country': request.headers.get('CF-IPCountry'),  # Cloudflare header
+        'timezone': request.headers.get('X-Timezone'),
+        'referrer': request.headers.get('Referer'),
+    }
+
+
+async def _get_or_create_session(analytics_ctx: dict) -> tuple[str, int]:
+    """
+    Get or create an active session for the user.
+    
+    Returns (user_id, session_id) tuple.
+    Uses 30-min inactivity timeout to determine if a new session should be created.
+    """
+    user_id = analytics_ctx.get('user_id')
+    if not user_id:
+        # Generate anonymous user ID if not provided
+        import uuid
+        user_id = f"anon_{uuid.uuid4().hex[:12]}"
+    
+    # Get or create active session with timeout tracking
+    session_id = await analytics_service.get_or_create_active_session(
+        user_id=user_id,
+        ip_address=analytics_ctx.get('ip_address'),
+        user_agent=analytics_ctx.get('user_agent'),
+        country=analytics_ctx.get('country'),
+        timezone=analytics_ctx.get('timezone'),
+        referrer=analytics_ctx.get('referrer'),
+    )
+    
+    return user_id, session_id
+
+
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
@@ -40,7 +107,10 @@ async def root():
         "docs": "http://localhost:5200/docs",
         "endpoints": {
             "POST /convert-cicd": "Convert CI/CD configurations",
-            "POST /validate-github-actions": "Validate GitHub Actions YAML (PyYAML + actionlint)"
+            "POST /detect-ci": "Detect CI platform from YAML content",
+            "POST /validate-github-actions": "Validate GitHub Actions YAML (PyYAML + actionlint)",
+            "GET /analytics/health": "Check analytics service health",
+            "GET /analytics/stats": "Get aggregated statistics (admin)",
         }
     }
 
@@ -207,6 +277,120 @@ def _semantic_double_check(
     return passed, all_reasons
 
 
+def _detect_ci_platform(yaml_content: str, file_path: Optional[str] = None) -> List[str]:
+    """
+    Detect CI/CD platform from YAML content based on keywords and structure.
+    Returns a list of detected platform names.
+    """
+    detected = []
+    content_lower = yaml_content.lower()
+    
+    # GitHub Actions detection
+    github_indicators = [
+        'runs-on:', 'uses:', 'github.event', 'workflow_dispatch',
+        'pull_request:', 'push:', 'jobs:', 'steps:'
+    ]
+    if (file_path and '.github/workflows' in file_path) or \
+       any(ind in content_lower for ind in github_indicators[:4]):
+        # Check for common GitHub Actions patterns
+        if 'jobs:' in content_lower and ('runs-on:' in content_lower or 'uses:' in content_lower):
+            detected.append('GitHub Actions')
+    
+    # Travis CI detection
+    travis_indicators = [
+        'travis', 'dist:', 'sudo:', 'language:', 'before_install:',
+        'before_script:', 'script:', 'after_success:', 'deploy:'
+    ]
+    if (file_path and '.travis.yml' in file_path) or \
+       (any(ind in content_lower for ind in travis_indicators) and 'language:' in content_lower):
+        detected.append('Travis CI')
+    
+    # CircleCI detection
+    circleci_indicators = [
+        'version: 2', 'circleci', 'orbs:', 'executors:',
+        'docker:', 'machine:', 'macos:', 'workflows:'
+    ]
+    if (file_path and '.circleci/config' in file_path) or \
+       ('version:' in content_lower and any(ind in content_lower for ind in circleci_indicators)):
+        if 'jobs:' in content_lower and 'docker:' in content_lower:
+            detected.append('CircleCI')
+    
+    # GitLab CI detection
+    gitlab_indicators = [
+        'gitlab', 'stages:', 'image:', 'before_script:',
+        'script:', 'artifacts:', 'cache:', '.gitlab-ci'
+    ]
+    if (file_path and '.gitlab-ci.yml' in file_path) or \
+       ('stages:' in content_lower and 'script:' in content_lower):
+        detected.append('GitLab CI')
+    
+    # Jenkins detection (Jenkinsfile)
+    jenkins_indicators = [
+        'pipeline', 'agent', 'stages', 'stage(', 'steps {',
+        'sh ', 'bat ', 'echo ', 'jenkinsfile'
+    ]
+    if (file_path and 'jenkinsfile' in file_path.lower()) or \
+       ('pipeline' in content_lower and 'agent' in content_lower and 'stages' in content_lower):
+        detected.append('Jenkins')
+    
+    # Azure Pipelines detection
+    azure_indicators = [
+        'trigger:', 'pool:', 'vmimage:', 'azure-pipelines',
+        'stages:', 'jobs:', 'steps:', 'task:'
+    ]
+    if (file_path and 'azure-pipelines' in file_path.lower()) or \
+       ('pool:' in content_lower and 'vmimage:' in content_lower):
+        detected.append('Azure Pipelines')
+    
+    # Bitbucket Pipelines detection  
+    bitbucket_indicators = [
+        'bitbucket-pipelines', 'pipelines:', 'default:', 'step:'
+    ]
+    if (file_path and 'bitbucket-pipelines' in file_path.lower()) or \
+       ('pipelines:' in content_lower and 'step:' in content_lower):
+        detected.append('Bitbucket Pipelines')
+    
+    return detected if detected else ['Unknown']
+
+
+@app.post("/detect-ci", response_model=DetectionResponse)
+async def detect_ci(request: DetectionRequest, http_request: Request, background_tasks: BackgroundTasks):
+    """Detect CI platform from YAML content"""
+    start_time = time.time()
+    analytics_ctx = _get_analytics_context(http_request)
+    
+    # Use pre-detected services from frontend if provided, otherwise detect from YAML
+    detected_platforms = request.detected_services if request.detected_services else _detect_ci_platform(request.yaml_content, request.file_path)
+    processing_time_ms = int((time.time() - start_time) * 1000)
+    
+    # Get or create session with 30-min timeout tracking
+    user_id, session_id = await _get_or_create_session(analytics_ctx)
+    
+    # Log detection to dedicated detection_logs table (in background)
+    background_tasks.add_task(
+        analytics_service.log_detection,
+        user_id=user_id,
+        session_id=session_id,
+        repo_owner=request.repo_owner,
+        repo_name=request.repo_name,
+        repo_branch=request.repo_branch,
+        detected_services=detected_platforms,
+        detection_count=len([p for p in detected_platforms if p != 'Unknown']),
+        detection_source='api',
+        detection_data={
+            'file_path': request.file_path,
+            'yaml_length': len(request.yaml_content),
+            'processing_time_ms': processing_time_ms,
+        }
+    )
+    
+    return DetectionResponse(
+        detected_platforms=detected_platforms,
+        confidence=0.9 if 'Unknown' not in detected_platforms else 0.3,
+        file_path=request.file_path,
+    )
+
+
 @app.post("/validate-github-actions", response_model=ValidationResult)
 async def validate_github_actions(request: ValidateGithubActionsRequest):
     print(f"[VALIDATE] Received request - yaml length: {len(request.yaml)}, has originalConfig: {bool(request.originalConfig)}, has llmSettings: {bool(request.llmSettings)}")
@@ -248,8 +432,13 @@ async def validate_github_actions(request: ValidateGithubActionsRequest):
 
 
 @app.post("/retry-conversion", response_model=ConversionResponse)
-async def retry_conversion(request: RetryConversionRequest):
+async def retry_conversion(request: RetryConversionRequest, http_request: Request):
     """Endpoint to retry conversion with user feedback"""
+    analytics_ctx = _get_analytics_context(http_request)
+    
+    # Get or create session with 30-min timeout tracking
+    user_id, session_id = await _get_or_create_session(analytics_ctx)
+    
     try:
         llm = request.llmSettings
         provider = (llm.provider if llm else 'ollama')
@@ -314,6 +503,36 @@ async def retry_conversion(request: RetryConversionRequest):
         current_attempts = (request.currentAttempts or 1) + 1
         
         print(f"[RETRY] Previous attempts: {request.currentAttempts}, New attempts: {current_attempts}")
+        
+        # Determine final status for analytics
+        final_status = "success"
+        if validation:
+            if not validation.yamlOk:
+                final_status = "failed"
+            elif not validation.actionlintOk:
+                final_status = "partial"
+            elif validation.doubleCheckOk is False:
+                final_status = "partial"
+        
+        # Log retry analytics in background
+        analytics_service.log_migration_background(
+            user_id=user_id,
+            session_id=session_id,
+            repo_owner=None,  # Not available in retry request
+            repo_name=None,
+            repo_branch=None,
+            source_ci_services=['travis-ci'],
+            target_platform=request.targetPlatform,
+            source_yaml=request.originalTravisConfig,
+            converted_yaml=converted,
+            provider_used=provider,
+            model_used=model,
+            attempts=current_attempts,
+            validation_yaml_ok=validation.yamlOk if validation else None,
+            validation_lint_ok=validation.actionlintOk if validation else None,
+            validation_double_check_ok=validation.doubleCheckOk if validation else None,
+            final_status=final_status,
+        )
 
         return ConversionResponse(
             convertedConfig=converted,
@@ -331,9 +550,15 @@ async def retry_conversion(request: RetryConversionRequest):
         print(f"Error during retry conversion: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e) or "Failed to retry conversion")
     
+
 @app.post("/convert-cicd", response_model=ConversionResponse)
-async def convert_cicd(request: ConversionRequest):
+async def convert_cicd(request: ConversionRequest, http_request: Request, background_tasks: BackgroundTasks):
     """Endpoint to convert CI/CD configurations"""
+    start_time = time.time()
+    analytics_ctx = _get_analytics_context(http_request)
+    
+    # Get or create session with 30-min timeout tracking
+    user_id, session_id = await _get_or_create_session(analytics_ctx)
 
     try:
         print(f"Received conversion request for repository: {request.repository.owner}/{request.repository.name} on branch {request.repository.branch}")
@@ -460,6 +685,41 @@ async def convert_cicd(request: ConversionRequest):
             )
             attempts = 1
             validation = None
+        
+        # Calculate processing time
+        processing_time_ms = int((time.time() - start_time) * 1000)
+        
+        # Determine final status
+        final_status = "success"
+        if validation:
+            if not validation.yamlOk:
+                final_status = "failed"
+            elif not validation.actionlintOk:
+                final_status = "partial"
+            elif validation.doubleCheckOk is False:
+                final_status = "partial"
+        
+        # Log analytics in background (fire and forget - won't slow down response)
+        background_tasks.add_task(
+            analytics_service.log_migration,
+            user_id=user_id,
+            session_id=session_id,
+            repo_owner=request.repository.owner,
+            repo_name=request.repository.name,
+            repo_branch=request.repository.branch,
+            source_ci_services=request.detectedServices,
+            target_platform=target_platform,
+            source_yaml=pipeline_content,  # Store source YAML
+            converted_yaml=converted,  # Store converted YAML
+            provider_used=provider,  # Just the name, no API key
+            model_used=model,
+            attempts=attempts,
+            validation_yaml_ok=validation.yamlOk if validation else None,
+            validation_lint_ok=validation.actionlintOk if validation else None,
+            validation_double_check_ok=validation.doubleCheckOk if validation else None,
+            final_status=final_status,
+            processing_time_ms=processing_time_ms,
+        )
             
         return ConversionResponse(
             convertedConfig=converted,
@@ -497,6 +757,53 @@ async def convert_cicd(request: ConversionRequest):
     except Exception as e:
         print(f"Error during conversion: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to convert CI/CD configuration: {str(e)}")
+
+
+# Analytics endpoints
+@app.get("/analytics/health")
+async def analytics_health():
+    """Check if analytics service is healthy"""
+    healthy = await analytics_service.health_check()
+    return {
+        "status": "healthy" if healthy else "unavailable",
+        "service": "analytics",
+    }
+
+
+@app.get("/analytics/stats")
+async def analytics_stats():
+    """Get aggregated migration statistics (for admin/dashboard)"""
+    stats = await analytics_service.get_stats()
+    return stats
+
+
+@app.post("/analytics/session")
+async def create_analytics_session(http_request: Request):
+    """
+    Create a new analytics session for tracking.
+    Called from frontend when user first visits.
+    Returns session_id to be used in subsequent requests.
+    """
+    analytics_ctx = _get_analytics_context(http_request)
+    user_id = analytics_ctx.get('user_id')
+    
+    if not user_id:
+        return {"error": "X-Analytics-User-ID header required", "session_id": None}
+    
+    # Ensure user exists
+    await analytics_service.get_or_create_user(user_id)
+    
+    # Create session
+    session_id = await analytics_service.create_session(
+        user_id=user_id,
+        ip_address=analytics_ctx.get('ip_address'),
+        user_agent=analytics_ctx.get('user_agent'),
+        country=analytics_ctx.get('country'),
+        timezone=analytics_ctx.get('timezone'),
+        referrer=analytics_ctx.get('referrer'),
+    )
+    
+    return {"session_id": session_id, "user_id": user_id}
         
 
 if __name__ == "__main__":

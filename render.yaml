@@ -6,6 +6,13 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /
+    disk:
+      name: cipilot-data
+      mountPath: /var/data
+      sizeGB: 1  # 1GB should be plenty for SQLite analytics
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/cipilot_analytics.db
 
   # Frontend Static Site
   - type: web
