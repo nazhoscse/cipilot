@@ -19,6 +19,7 @@ import { useSettings } from '../../context/SettingsContext'
 import { useToast } from '../../context/ToastContext'
 import { useMigrationHistory, triggerHistoryRefresh } from '../../hooks/useMigrationHistory'
 import { cicdApi, buildConversionRequest } from '../../api/cicd'
+import { githubProxyApi } from '../../api/githubProxy'
 import type { MigrationHistoryItem } from '../../types/migration'
 
 // Known CI/CD config file paths
@@ -138,12 +139,29 @@ export function ConversionPanel() {
   const [showSourcePreview, setShowSourcePreview] = useState(false)
   const [isFetchingConfig, setIsFetchingConfig] = useState(false)
   const [actualDefaultBranch, setActualDefaultBranch] = useState<string | null>(null)
+  const [serverTokenAvailable, setServerTokenAvailable] = useState<boolean | null>(null)
+
+  // Check if PR creation is possible (server token or user token)
+  const canCreatePR = serverTokenAvailable || !!settings.githubToken
 
   const { repository, detectedServices, fetchedConfigs, conversionResult, editedYaml } =
     state
 
   // Use local isConverting state for reliable UI updates
   const isLoading = isConverting || state.isLoading
+
+  // Check if server-side GitHub token is available (on mount)
+  useEffect(() => {
+    if (serverTokenAvailable === null) {
+      githubProxyApi.getStatus()
+        .then((status) => {
+          setServerTokenAvailable(status.server_token_configured)
+        })
+        .catch(() => {
+          setServerTokenAvailable(false)
+        })
+    }
+  }, [serverTokenAvailable])
 
   // Fetch actual default branch from GitHub when repository changes
   useEffect(() => {
@@ -871,15 +889,15 @@ export function ConversionPanel() {
                     variant="primary"
                     size="sm"
                     onClick={() => setPrDialogOpen(true)}
-                    disabled={!settings.githubToken}
+                    disabled={!canCreatePR}
                     title=""
                     leftIcon={<GitPullRequest className="w-4 h-4" />}
                   >
                     Create PR
                   </Button>
-                  {!settings.githubToken && (
+                  {!canCreatePR && (
                     <div className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-black/80 px-2 py-1 text-xs text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100">
-                      Add your GitHub PAT in Settings to enable PR creation.
+                      GitHub connection unavailable. Add your PAT in Settings.
                     </div>
                   )}
                 </div>

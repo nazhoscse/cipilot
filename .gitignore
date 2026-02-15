@@ -116,3 +116,4 @@ backend/data/*.db-wal
 writing/
 INTERNAL_ANALYTICS.md
 RENDER_DATABASE_PERSISTENCE_TROUBLESHOOTING.md
+backend/.env

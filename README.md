@@ -227,7 +227,12 @@ CIPilot supports multiple LLM providers. Configure your preferred provider in th
 
 #### Backend (`backend/`)
 
-No server-side environment variables are required. All LLM API keys are passed per-request from the client.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_PAT` | _(optional)_ | **Server-side GitHub Personal Access Token** for fork/PR creation. If set, users can create PRs without configuring their own GitHub token. Users can override this by setting their own PAT in Settings. Required scopes: `repo` + `workflow` |
+| `DATABASE_PATH` | `./data/cipilot.db` | Path to SQLite database for analytics storage (used in production with persistent disk) |
+
+> **💡 Note:** All LLM API keys are passed per-request from the client and are **never** stored server-side.
 
 #### Web Application (`web/`)
 
@@ -272,9 +277,11 @@ cp web/.env.example web/.env
 7. **Export the result:**
    - **Copy** — copies the generated YAML to clipboard
    - **Create PR** — creates a pull request on the GitHub repository:
+     - Uses **CIPilot's server-side GitHub account** by default (no PAT configuration needed!)
+     - Users can optionally configure their own GitHub PAT in Settings to use their personal account
      - If you have push access → creates a branch and opens a PR directly
      - If you don't have push access → forks the repo, creates a branch, and opens a cross-fork PR
-     - **Required GitHub PAT scopes:** `repo` + `workflow` (classic PAT) or Contents + Workflows read/write (fine-grained PAT)
+     - **GitHub PAT scopes (if using your own):** `repo` + `workflow` (classic PAT) or Contents + Workflows read/write (fine-grained PAT)
 
 8. **View history:** Past migrations are saved locally in IndexedDB and accessible from the **History** page in the sidebar.
 

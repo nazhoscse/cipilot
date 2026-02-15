@@ -13,6 +13,8 @@ services:
     envVars:
       - key: DATABASE_PATH
         value: /var/data/cipilot_analytics.db
+      - key: GITHUB_PAT
+        sync: false  # Set this manually in Render dashboard for security
 
   # Frontend Static Site
   - type: web
