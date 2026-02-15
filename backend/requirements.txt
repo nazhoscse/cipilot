@@ -6,4 +6,6 @@ pyyaml
 langgraph
 langchain-core
 aiosqlite
-user-agentspython-dotenv
+user-agents
+python-dotenv
+httpx
