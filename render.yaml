@@ -9,7 +9,7 @@ services:
     disk:
       name: cipilot-data
       mountPath: /var/data
-      sizeGB: 1  # 1GB should be plenty for SQLite analytics
+      sizeGB: 1
     envVars:
       - key: DATABASE_PATH
         value: /var/data/cipilot_analytics.db
