@@ -23,6 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code to the container 
 COPY . .
 
+# Create directory for persistent disk mount (Render will mount here)
+RUN mkdir -p /var/data && chmod 777 /var/data
+
 # Expose port
 EXPOSE 5200
 
