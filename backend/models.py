@@ -74,3 +74,54 @@ class DetectionResponse(BaseModel):
     detected_platforms: List[str]
     confidence: Optional[float] = None
     file_path: Optional[str] = None
+
+
+# ============================================================================
+# GitHub Proxy Models - for server-side GitHub operations (fork, PR creation)
+# ============================================================================
+
+class GitHubForkRequest(BaseModel):
+    """Request to fork a repository using server-side PAT"""
+    owner: str
+    repo: str
+
+
+class GitHubBranchRequest(BaseModel):
+    """Request to create a branch"""
+    owner: str
+    repo: str
+    branch_name: str
+    base_sha: str
+
+
+class GitHubCommitFileRequest(BaseModel):
+    """Request to commit a file to a repository"""
+    owner: str
+    repo: str
+    path: str
+    content: str  # UTF-8 content (not base64)
+    branch: str
+    message: str
+
+
+class GitHubCreatePRRequest(BaseModel):
+    """Request to create a pull request"""
+    owner: str  # Target repo owner (original repo for fork PRs)
+    repo: str
+    title: str
+    body: str
+    head: str  # Branch name or fork:branch
+    base: str  # Base branch name
+
+
+class GitHubCheckAccessRequest(BaseModel):
+    """Request to check push access to a repository"""
+    owner: str
+    repo: str
+
+
+class GitHubProxyResponse(BaseModel):
+    """Generic response from GitHub proxy"""
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None

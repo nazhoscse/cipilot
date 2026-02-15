@@ -1,7 +1,13 @@
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from models import ConversionRequest, ConversionResponse, ValidateGithubActionsRequest, ValidationResult, RetryConversionRequest, DetectionRequest, DetectionResponse
+from dotenv import load_dotenv
+from models import (
+    ConversionRequest, ConversionResponse, ValidateGithubActionsRequest, 
+    ValidationResult, RetryConversionRequest, DetectionRequest, DetectionResponse,
+    GitHubForkRequest, GitHubBranchRequest, GitHubCommitFileRequest, 
+    GitHubCreatePRRequest, GitHubCheckAccessRequest, GitHubProxyResponse
+)
 from llm_converter import convert_pipeline, semantic_verify_migration
 from agentic_pipeline import run_conversion_pipeline
 from analytics import analytics_service
@@ -11,7 +17,13 @@ import subprocess
 import requests
 import time
 import re
+import os
+import base64
+import httpx
 from typing import Optional, List
+
+# Load .env file for local development
+load_dotenv()
 
 try:
     import yaml  # PyYAML
@@ -1035,6 +1047,391 @@ async def get_sessions(page: int = 1, limit: int = 20):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching sessions: {str(e)}")
+
+
+# ============================================================================
+# GitHub Proxy Endpoints - Server-side GitHub operations using CIPilot's PAT
+# ============================================================================
+# These endpoints allow users to fork repos and create PRs without configuring
+# their own GitHub PAT. The server-side PAT (GITHUB_PAT env var) is used by default.
+# Users can override by providing their own PAT in the request header.
+
+GITHUB_API_URL = "https://api.github.com"
+
+def _get_github_token(request: Request) -> str:
+    """
+    Get GitHub token - user-provided (header) or server-side (env).
+    
+    Priority:
+    1. X-GitHub-Token header (user override)
+    2. GITHUB_PAT environment variable (server default)
+    
+    Returns the token to use, or raises HTTPException if none available.
+    """
+    # Check for user-provided token in header
+    user_token = request.headers.get("X-GitHub-Token")
+    if user_token:
+        return user_token
+    
+    # Fall back to server-side PAT
+    server_token = os.getenv("GITHUB_PAT")
+    if server_token:
+        return server_token
+    
+    raise HTTPException(
+        status_code=500, 
+        detail="GitHub token not configured. Please set GITHUB_PAT environment variable."
+    )
+
+
+def _get_github_headers(token: str) -> dict:
+    """Get headers for GitHub API requests"""
+    # Determine auth scheme based on token prefix
+    classic_prefixes = ['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_']
+    auth_scheme = 'token' if any(token.startswith(p) for p in classic_prefixes) else 'Bearer'
+    
+    return {
+        "Authorization": f"{auth_scheme} {token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _is_using_server_token(request: Request) -> bool:
+    """Check if request is using server-side token (not user-provided)"""
+    return not request.headers.get("X-GitHub-Token")
+
+
+@app.get("/github/status")
+async def github_status():
+    """Check if server-side GitHub PAT is configured"""
+    server_token = os.getenv("GITHUB_PAT")
+    return {
+        "server_token_configured": bool(server_token),
+        "message": "Server-side GitHub PAT is available. Users can fork repos and create PRs without their own token." if server_token else "No server-side GitHub PAT configured. Users must provide their own token."
+    }
+
+
+@app.get("/github/user")
+async def get_github_user(request: Request):
+    """Get current authenticated GitHub user"""
+    token = _get_github_token(request)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_URL}/user",
+            headers=_get_github_headers(token),
+            timeout=30.0
+        )
+    
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+    
+    user_data = response.json()
+    return GitHubProxyResponse(
+        success=True,
+        data={
+            "login": user_data["login"],
+            "id": user_data["id"],
+            "avatar_url": user_data.get("avatar_url"),
+            "name": user_data.get("name"),
+            "using_server_token": _is_using_server_token(request)
+        }
+    )
+
+
+@app.post("/github/check-access")
+async def check_github_access(req: GitHubCheckAccessRequest, request: Request):
+    """Check if user has push access to a repository"""
+    token = _get_github_token(request)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_URL}/repos/{req.owner}/{req.repo}",
+            headers=_get_github_headers(token),
+            timeout=30.0
+        )
+    
+    if response.status_code == 404:
+        return GitHubProxyResponse(
+            success=False,
+            error="Repository not found or not accessible"
+        )
+    
+    if response.status_code != 200:
+        return GitHubProxyResponse(
+            success=False,
+            error=f"GitHub API error: {response.text}"
+        )
+    
+    repo_data = response.json()
+    has_push = repo_data.get("permissions", {}).get("push", False)
+    
+    return GitHubProxyResponse(
+        success=True,
+        data={
+            "has_push_access": has_push,
+            "default_branch": repo_data.get("default_branch"),
+            "full_name": repo_data.get("full_name"),
+            "private": repo_data.get("private", False),
+            "using_server_token": _is_using_server_token(request)
+        }
+    )
+
+
+@app.post("/github/fork")
+async def fork_repository(req: GitHubForkRequest, request: Request):
+    """Fork a repository using server-side or user-provided PAT"""
+    token = _get_github_token(request)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{GITHUB_API_URL}/repos/{req.owner}/{req.repo}/forks",
+            headers=_get_github_headers(token),
+            timeout=60.0  # Forking can take time
+        )
+    
+    if response.status_code == 202:
+        # Fork created successfully
+        fork_data = response.json()
+        return GitHubProxyResponse(
+            success=True,
+            data={
+                "owner": fork_data["owner"]["login"],
+                "repo": fork_data["name"],
+                "full_name": fork_data["full_name"],
+                "html_url": fork_data["html_url"],
+                "default_branch": fork_data.get("default_branch"),
+                "using_server_token": _is_using_server_token(request)
+            }
+        )
+    elif response.status_code == 422:
+        # Fork might already exist - try to get user's fork
+        user_response = await client.get(
+            f"{GITHUB_API_URL}/user",
+            headers=_get_github_headers(token),
+            timeout=30.0
+        )
+        if user_response.status_code == 200:
+            username = user_response.json()["login"]
+            # Check if fork exists
+            fork_check = await client.get(
+                f"{GITHUB_API_URL}/repos/{username}/{req.repo}",
+                headers=_get_github_headers(token),
+                timeout=30.0
+            )
+            if fork_check.status_code == 200:
+                fork_data = fork_check.json()
+                return GitHubProxyResponse(
+                    success=True,
+                    data={
+                        "owner": fork_data["owner"]["login"],
+                        "repo": fork_data["name"],
+                        "full_name": fork_data["full_name"],
+                        "html_url": fork_data["html_url"],
+                        "default_branch": fork_data.get("default_branch"),
+                        "already_exists": True,
+                        "using_server_token": _is_using_server_token(request)
+                    }
+                )
+        
+        return GitHubProxyResponse(
+            success=False,
+            error="Fork already exists or validation error"
+        )
+    else:
+        return GitHubProxyResponse(
+            success=False,
+            error=f"Failed to fork repository: {response.text}"
+        )
+
+
+@app.post("/github/branch")
+async def create_branch(req: GitHubBranchRequest, request: Request):
+    """Create a new branch in a repository"""
+    token = _get_github_token(request)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{GITHUB_API_URL}/repos/{req.owner}/{req.repo}/git/refs",
+            headers=_get_github_headers(token),
+            json={
+                "ref": f"refs/heads/{req.branch_name}",
+                "sha": req.base_sha
+            },
+            timeout=30.0
+        )
+    
+    if response.status_code == 201:
+        ref_data = response.json()
+        return GitHubProxyResponse(
+            success=True,
+            data={
+                "ref": ref_data["ref"],
+                "sha": ref_data["object"]["sha"],
+                "using_server_token": _is_using_server_token(request)
+            }
+        )
+    elif response.status_code == 422:
+        return GitHubProxyResponse(
+            success=False,
+            error="Branch already exists"
+        )
+    else:
+        return GitHubProxyResponse(
+            success=False,
+            error=f"Failed to create branch: {response.text}"
+        )
+
+
+@app.get("/github/repo/{owner}/{repo}/default-branch")
+async def get_default_branch_ref(owner: str, repo: str, request: Request):
+    """Get the SHA of the default branch"""
+    token = _get_github_token(request)
+    
+    async with httpx.AsyncClient() as client:
+        # First get repo info to find default branch name
+        repo_response = await client.get(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}",
+            headers=_get_github_headers(token),
+            timeout=30.0
+        )
+        
+        if repo_response.status_code != 200:
+            return GitHubProxyResponse(
+                success=False,
+                error=f"Failed to get repository info: {repo_response.text}"
+            )
+        
+        repo_data = repo_response.json()
+        default_branch = repo_data.get("default_branch", "main")
+        
+        # Get the ref for the default branch
+        ref_response = await client.get(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/ref/heads/{default_branch}",
+            headers=_get_github_headers(token),
+            timeout=30.0
+        )
+        
+        if ref_response.status_code != 200:
+            return GitHubProxyResponse(
+                success=False,
+                error=f"Failed to get branch ref: {ref_response.text}"
+            )
+        
+        ref_data = ref_response.json()
+        
+        return GitHubProxyResponse(
+            success=True,
+            data={
+                "sha": ref_data["object"]["sha"],
+                "ref": default_branch,
+                "using_server_token": _is_using_server_token(request)
+            }
+        )
+
+
+@app.post("/github/commit-file")
+async def commit_file(req: GitHubCommitFileRequest, request: Request):
+    """Commit a file to a repository using the Contents API"""
+    token = _get_github_token(request)
+    
+    # Base64 encode the content
+    content_b64 = base64.b64encode(req.content.encode('utf-8')).decode('utf-8')
+    
+    async with httpx.AsyncClient() as client:
+        # Check if file exists to get its SHA
+        check_response = await client.get(
+            f"{GITHUB_API_URL}/repos/{req.owner}/{req.repo}/contents/{req.path}",
+            headers=_get_github_headers(token),
+            params={"ref": req.branch},
+            timeout=30.0
+        )
+        
+        existing_sha = None
+        if check_response.status_code == 200:
+            existing_sha = check_response.json().get("sha")
+        
+        # Prepare payload
+        payload = {
+            "message": req.message,
+            "content": content_b64,
+            "branch": req.branch,
+        }
+        if existing_sha:
+            payload["sha"] = existing_sha
+        
+        # Commit the file
+        response = await client.put(
+            f"{GITHUB_API_URL}/repos/{req.owner}/{req.repo}/contents/{req.path}",
+            headers=_get_github_headers(token),
+            json=payload,
+            timeout=30.0
+        )
+    
+    if response.status_code in [200, 201]:
+        commit_data = response.json()
+        return GitHubProxyResponse(
+            success=True,
+            data={
+                "sha": commit_data["content"]["sha"],
+                "commit_sha": commit_data["commit"]["sha"],
+                "using_server_token": _is_using_server_token(request)
+            }
+        )
+    else:
+        error_msg = response.text
+        
+        # Provide helpful error for workflow permission issues
+        if response.status_code == 404 and '.github/workflows' in req.path:
+            error_msg = (
+                "Cannot create GitHub Actions workflow file. "
+                "The token may lack 'workflow' scope (for classic PAT) or "
+                "'Workflows' permission (for fine-grained PAT)."
+            )
+        
+        return GitHubProxyResponse(
+            success=False,
+            error=error_msg
+        )
+
+
+@app.post("/github/pull-request")
+async def create_pull_request(req: GitHubCreatePRRequest, request: Request):
+    """Create a pull request"""
+    token = _get_github_token(request)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{GITHUB_API_URL}/repos/{req.owner}/{req.repo}/pulls",
+            headers=_get_github_headers(token),
+            json={
+                "title": req.title,
+                "body": req.body,
+                "head": req.head,
+                "base": req.base,
+            },
+            timeout=30.0
+        )
+    
+    if response.status_code == 201:
+        pr_data = response.json()
+        return GitHubProxyResponse(
+            success=True,
+            data={
+                "number": pr_data["number"],
+                "html_url": pr_data["html_url"],
+                "state": pr_data["state"],
+                "title": pr_data["title"],
+                "using_server_token": _is_using_server_token(request)
+            }
+        )
+    else:
+        return GitHubProxyResponse(
+            success=False,
+            error=f"Failed to create pull request: {response.text}"
+        )
         
 
 if __name__ == "__main__":
