@@ -428,8 +428,9 @@ export function ConversionPanel() {
     }
 
     // Check if LLM provider is configured before attempting conversion
+    // Note: Ollama only works locally, so we always require an API key for cloud providers
     const llmSettings = getCurrentLLMSettings()
-    const isProviderConfigured = llmSettings.apiKey || llmSettings.provider === 'ollama'
+    const isProviderConfigured = !!llmSettings.apiKey
     
     if (!isProviderConfigured) {
       toast.warning(
@@ -523,7 +524,12 @@ export function ConversionPanel() {
         message.toLowerCase().includes('llm') ||
         message.toLowerCase().includes('api key') ||
         message.toLowerCase().includes('connection') ||
-        message.toLowerCase().includes('refused')
+        message.toLowerCase().includes('refused') ||
+        message.toLowerCase().includes('httpconnection') ||
+        message.toLowerCase().includes('max retries') ||
+        message.toLowerCase().includes('401') ||
+        message.toLowerCase().includes('403') ||
+        message.toLowerCase().includes('unauthorized')
 
       setError(message)
 
@@ -531,8 +537,12 @@ export function ConversionPanel() {
         // Show as warning (yellow) instead of error (red) for configuration issues
         toast.warning(
           'Configuration Issue',
-          `${message}. Please check your LLM settings in ⚙️ Settings (provider: ${settings.llmProvider}, model: ${settings.llmModel}).`
+          `Please check your LLM settings in ⚙️ Settings (provider: ${settings.llmProvider}, model: ${settings.llmModel}).`
         )
+        // Open onboarding guide at the Settings step to help user configure
+        setTimeout(() => {
+          startOnboardingAtStep(SETTINGS_STEP_INDEX)
+        }, 500)
       } else if (message.toLowerCase().includes('server error') || message.toLowerCase().includes('500')) {
         toast.warning(
           'Server Temporarily Unavailable',

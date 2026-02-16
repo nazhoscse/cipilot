@@ -1,6 +1,13 @@
 export type LLMProvider = 'ollama' | 'openai' | 'xai' | 'groq' | 'anthropic' | 'google' | 'generic'
 export type Theme = 'light' | 'dark' | 'system'
 
+// Check if running in production (deployed to remote server)
+// Ollama only works locally, not in production
+const isProduction = typeof window !== 'undefined' && 
+  import.meta.env.PROD && 
+  !window.location.hostname.includes('localhost') && 
+  !window.location.hostname.includes('127.0.0.1')
+
 export interface AppSettings {
   // LLM Settings
   llmProvider: LLMProvider
@@ -33,8 +40,9 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  llmProvider: 'ollama',
-  llmModel: 'gemma3:12b',
+  // In production, default to Anthropic (requires API key); locally default to Ollama
+  llmProvider: isProduction ? 'anthropic' : 'ollama',
+  llmModel: isProduction ? 'claude-3-5-sonnet-20241022' : 'gemma3:12b',
   ollamaModel: 'gemma3:12b',
   openaiModel: 'gpt-4o-mini',
   xaiModel: 'grok-2-latest',
