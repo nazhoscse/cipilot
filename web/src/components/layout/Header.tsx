@@ -81,6 +81,7 @@ export function Header({ onMenuClick, showMenuButton = false }: HeaderProps) {
                 size="icon"
                 onClick={() => setSettingsOpen(true)}
                 aria-label="Settings"
+                data-tour="settings-button"
               >
                 <Settings className="w-5 h-5" />
               </Button>

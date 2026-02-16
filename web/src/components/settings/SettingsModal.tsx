@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Key, Server, Github, Download, Upload, RotateCcw, Eye, EyeOff } from 'lucide-react'
+import { Key, Server, Github, Download, Upload, RotateCcw, Eye, EyeOff, HelpCircle } from 'lucide-react'
 import { Modal, Button, Input, Select, Card, CardTitle, CardContent } from '../common'
 import { useSettings } from '../../context/SettingsContext'
 import { useExportImport } from '../../hooks/useExportImport'
@@ -11,7 +11,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const { settings, updateSettings, resetSettings, isProviderConfigured } = useSettings()
+  const { settings, updateSettings, resetSettings, isProviderConfigured, setShowOnboarding, setOnboardingComplete } = useSettings()
   const { handleExport, triggerFileInput, isExporting, isImporting } = useExportImport()
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings)
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({})
@@ -348,6 +348,30 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
             <p className="text-xs text-[var(--text-muted)] mt-2">
               Export your migration history to JSON for backup or import from a previous export.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Getting Started Guide Section */}
+        <Card variant="bordered" padding="md">
+          <CardTitle className="flex items-center gap-2 mb-4">
+            <HelpCircle className="w-5 h-5 text-primary-500" />
+            Help
+          </CardTitle>
+          <CardContent>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setOnboardingComplete(false)
+                setShowOnboarding(true)
+                onClose()
+              }}
+              leftIcon={<HelpCircle className="w-4 h-4" />}
+            >
+              Restart Getting Started Guide
+            </Button>
+            <p className="text-xs text-[var(--text-muted)] mt-2">
+              Show the step-by-step tutorial for new users again.
             </p>
           </CardContent>
         </Card>

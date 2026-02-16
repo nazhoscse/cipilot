@@ -98,7 +98,7 @@ export function RepoInput({ onSubmit, isLoading, error, initialRepo }: RepoInput
               Repository URL
             </label>
             <div className="flex gap-3">
-              <div className="flex-1">
+              <div className="flex-1" data-tour="repo-input">
                 <Input
                   value={repoUrl}
                   onChange={(e) => {
@@ -118,6 +118,7 @@ export function RepoInput({ onSubmit, isLoading, error, initialRepo }: RepoInput
                 isLoading={isLoading}
                 disabled={!repoUrl || isLoading}
                 className="whitespace-nowrap"
+                data-tour="detect-button"
               >
                 {isLoading ? 'Detecting...' : 'Detect CI/CD'}
               </Button>

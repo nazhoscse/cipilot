@@ -1,9 +1,11 @@
 import { useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { AppLayout } from './components/layout/AppLayout'
+import { OnboardingGuide } from './components/common'
 import { HomePage } from './pages/HomePage'
 import { HistoryPage } from './pages/HistoryPage'
 import { NotFoundPage } from './pages/NotFoundPage'
+import { useSettings } from './context/SettingsContext'
 import { initAnalyticsSession } from './utils/analytics'
 
 // Get API base URL for analytics
@@ -15,6 +17,8 @@ const getApiBaseUrl = (): string => {
 }
 
 function App() {
+  const { showOnboarding, setOnboardingComplete, onboardingStartStep } = useSettings()
+
   // Initialize analytics session on app load
   useEffect(() => {
     const apiBaseUrl = getApiBaseUrl()
@@ -23,14 +27,30 @@ function App() {
     })
   }, [])
 
+  const handleOnboardingComplete = () => {
+    setOnboardingComplete(true)
+  }
+
+  const handleOnboardingSkip = () => {
+    setOnboardingComplete(true)
+  }
+
   return (
-    <AppLayout>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/history" element={<HistoryPage />} />
-        <Route path="*" element={<NotFoundPage />} />
-      </Routes>
-    </AppLayout>
+    <>
+      <OnboardingGuide
+        isOpen={showOnboarding}
+        onComplete={handleOnboardingComplete}
+        onSkip={handleOnboardingSkip}
+        startStep={onboardingStartStep}
+      />
+      <AppLayout>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </AppLayout>
+    </>
   )
 }
 

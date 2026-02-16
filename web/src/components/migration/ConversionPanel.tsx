@@ -22,6 +22,9 @@ import { cicdApi, buildConversionRequest } from '../../api/cicd'
 import { githubProxyApi } from '../../api/githubProxy'
 import type { MigrationHistoryItem } from '../../types/migration'
 
+// Step index for "Configure AI Provider" in the onboarding guide
+const SETTINGS_STEP_INDEX = 3
+
 // Known CI/CD config file paths
 const CI_CONFIG_PATHS: Record<string, { paths: string[]; name: string; isFolder?: boolean }> = {
   github: { paths: ['.github/workflows'], name: 'GitHub Actions', isFolder: true },
@@ -126,7 +129,7 @@ async function fetchGitHubContents(
 
 export function ConversionPanel() {
   const { state, setEditedYaml, setConversionResult, setError, setStep, setFetchedConfigs } = useMigration()
-  const { getCurrentLLMSettings, settings } = useSettings()
+  const { getCurrentLLMSettings, settings, startOnboardingAtStep } = useSettings()
   const toast = useToast()
   const { saveMigration, updateMigration } = useMigrationHistory()
 
@@ -424,14 +427,28 @@ export function ConversionPanel() {
       return
     }
 
+    // Check if LLM provider is configured before attempting conversion
+    const llmSettings = getCurrentLLMSettings()
+    const isProviderConfigured = llmSettings.apiKey || llmSettings.provider === 'ollama'
+    
+    if (!isProviderConfigured) {
+      toast.warning(
+        'LLM Provider Not Configured',
+        'Please configure your AI provider in Settings (⚙️) before migrating. Add an API key for Anthropic, OpenAI, or another provider.'
+      )
+      // Open onboarding guide at the Settings step to help user configure
+      setTimeout(() => {
+        startOnboardingAtStep(SETTINGS_STEP_INDEX)
+      }, 300)
+      return
+    }
+
     // Set local state first for immediate UI update
     setIsConverting(true)
     setError(undefined)
     setStep('converting')
 
     try {
-      const llmSettings = getCurrentLLMSettings()
-
       // Filter fetchedConfigs to only include selected services
       const selectedConfigs: Record<string, string> = {}
       for (const [key, value] of Object.entries(fetchedConfigs)) {
@@ -498,21 +515,28 @@ export function ConversionPanel() {
         }
       }
 
-      // Check if the error is related to invalid model or API issues
-      const isModelError = message.toLowerCase().includes('model') ||
+      // Check if the error is related to configuration/API issues (show as warning, not error)
+      const isConfigurationIssue = message.toLowerCase().includes('model') ||
         message.toLowerCase().includes('invalid') ||
         message.toLowerCase().includes('not found') ||
         message.toLowerCase().includes('configuration') ||
         message.toLowerCase().includes('llm') ||
-        message.toLowerCase().includes('api') ||
-        message.toLowerCase().includes('server error')
+        message.toLowerCase().includes('api key') ||
+        message.toLowerCase().includes('connection') ||
+        message.toLowerCase().includes('refused')
 
       setError(message)
 
-      if (isModelError) {
-        toast.error(
-          'Configuration Error',
-          `${message}. Check your LLM settings (model: ${settings.llmModel}, provider: ${settings.llmProvider}).`
+      if (isConfigurationIssue) {
+        // Show as warning (yellow) instead of error (red) for configuration issues
+        toast.warning(
+          'Configuration Issue',
+          `${message}. Please check your LLM settings in ⚙️ Settings (provider: ${settings.llmProvider}, model: ${settings.llmModel}).`
+        )
+      } else if (message.toLowerCase().includes('server error') || message.toLowerCase().includes('500')) {
+        toast.warning(
+          'Server Temporarily Unavailable',
+          'The conversion service is experiencing issues. Please try again in a moment.'
         )
       } else {
         toast.error('Conversion failed', message)
@@ -530,7 +554,7 @@ export function ConversionPanel() {
     setStep,
     toast,
     saveMigration,
-    toast,
+    startOnboardingAtStep,
   ])
 
   const handleValidate = useCallback(async () => {
@@ -693,12 +717,14 @@ export function ConversionPanel() {
               <ArrowRight className="w-4 h-4 text-[var(--text-muted)]" />
               <span className="text-sm text-primary-500">GitHub Actions</span>
             </div>
-            <CIServiceChips
-              services={detectedServices}
-              selectedServices={selectedServices}
-              onToggle={handleToggleService}
-              selectable={true}
-            />
+            <div data-tour="service-chips">
+              <CIServiceChips
+                services={detectedServices}
+                selectedServices={selectedServices}
+                onToggle={handleToggleService}
+                selectable={true}
+              />
+            </div>
           </div>
 
           {!conversionResult && (
@@ -709,6 +735,7 @@ export function ConversionPanel() {
               disabled={selectedServices.length === 0}
               leftIcon={<Sparkles className="w-4 h-4" />}
               className="shrink-0"
+              data-tour="migrate-button"
             >
               {isLoading
                 ? 'Converting...'

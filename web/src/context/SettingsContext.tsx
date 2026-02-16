@@ -12,11 +12,19 @@ interface SettingsContextType {
     apiKey?: string
   }
   isProviderConfigured: (provider: LLMProvider) => boolean
+  // Onboarding state
+  hasCompletedOnboarding: boolean
+  setOnboardingComplete: (complete: boolean) => void
+  showOnboarding: boolean
+  setShowOnboarding: (show: boolean) => void
+  onboardingStartStep: number
+  startOnboardingAtStep: (step: number) => void
 }
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined)
 
 const SETTINGS_KEY = 'cigrate-settings'
+const ONBOARDING_KEY = 'cigrate-onboarding-complete'
 
 function loadSettings(): AppSettings {
   try {
@@ -39,12 +47,57 @@ function saveSettings(settings: AppSettings): void {
   }
 }
 
+function loadOnboardingState(): boolean {
+  try {
+    const stored = localStorage.getItem(ONBOARDING_KEY)
+    return stored === 'true'
+  } catch {
+    return false
+  }
+}
+
+function saveOnboardingState(complete: boolean): void {
+  try {
+    localStorage.setItem(ONBOARDING_KEY, String(complete))
+  } catch (e) {
+    console.error('Failed to save onboarding state:', e)
+  }
+}
+
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(loadOnboardingState)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [onboardingStartStep, setOnboardingStartStep] = useState(0)
+
+  // Show onboarding on first visit
+  useEffect(() => {
+    if (!hasCompletedOnboarding) {
+      // Small delay to let the app render first
+      const timer = setTimeout(() => {
+        setShowOnboarding(true)
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [hasCompletedOnboarding])
 
   useEffect(() => {
     saveSettings(settings)
   }, [settings])
+
+  const setOnboardingComplete = useCallback((complete: boolean) => {
+    setHasCompletedOnboarding(complete)
+    saveOnboardingState(complete)
+    if (complete) {
+      setShowOnboarding(false)
+      setOnboardingStartStep(0)
+    }
+  }, [])
+
+  const startOnboardingAtStep = useCallback((step: number) => {
+    setOnboardingStartStep(step)
+    setShowOnboarding(true)
+  }, [])
 
   const updateSettings = useCallback((updates: Partial<AppSettings>) => {
     setSettings((prev) => {
@@ -153,6 +206,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         resetSettings,
         getCurrentLLMSettings,
         isProviderConfigured,
+        hasCompletedOnboarding,
+        setOnboardingComplete,
+        showOnboarding,
+        setShowOnboarding,
+        onboardingStartStep,
+        startOnboardingAtStep,
       }}
     >
       {children}
