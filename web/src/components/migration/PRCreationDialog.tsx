@@ -30,7 +30,7 @@ export function PRCreationDialog({
   const toast = useToast()
 
   const [branchName, setBranchName] = useState(generateBranchName)
-  const [commitMessage, setCommitMessage] = useState('chore: migrate CI/CD to GitHub Actions')
+  const [commitMessage, setCommitMessage] = useState('ci: add GitHub Actions workflow (migrated by CIPilot)')
   const [prTitle, setPrTitle] = useState('[CIPilot] Migrate CI/CD configuration to GitHub Actions')
   const [prBody, setPrBody] = useState(
     `## Summary
