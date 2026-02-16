@@ -225,6 +225,7 @@ class AnalyticsService:
         validation_double_check_ok: Optional[bool] = None,
         final_status: Optional[str] = None,
         processing_time_ms: Optional[int] = None,
+        reviewer_id: Optional[str] = None,
     ) -> Optional[int]:
         """Log a migration operation"""
         if not self._initialized:
@@ -253,6 +254,7 @@ class AnalyticsService:
                 validation_double_check_ok=validation_double_check_ok,
                 final_status=final_status,
                 processing_time_ms=processing_time_ms,
+                reviewer_id=reviewer_id,
             )
             
             return await self._repository.log_migration(log)

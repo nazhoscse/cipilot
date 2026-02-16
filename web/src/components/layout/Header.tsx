@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Settings, Home, History, Menu, Github, Plane } from 'lucide-react'
+import { Settings, Home, History, Menu, Github, Plane, Shield } from 'lucide-react'
 import { Button, ThemeToggle } from '../common'
 import { SettingsModal } from '../settings/SettingsModal'
+import { useReviewer } from '../../context/ReviewerContext'
 
 interface HeaderProps {
   onMenuClick?: () => void
@@ -12,6 +13,7 @@ interface HeaderProps {
 export function Header({ onMenuClick, showMenuButton = false }: HeaderProps) {
   const location = useLocation()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { isReviewer, reviewer, provider } = useReviewer()
 
   const navItems = [
     { path: '/', label: 'Home', icon: Home },
@@ -75,6 +77,18 @@ export function Header({ onMenuClick, showMenuButton = false }: HeaderProps) {
 
             {/* Right: Actions */}
             <div className="flex items-center gap-2">
+              {/* Reviewer Badge */}
+              {isReviewer && reviewer && (
+                <div 
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg"
+                  title={`Reviewer: ${reviewer.name}\nProvider: ${provider?.name?.toUpperCase()} - ${provider?.model}`}
+                >
+                  <Shield className="w-4 h-4 text-amber-500" />
+                  <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                    Reviewer
+                  </span>
+                </div>
+              )}
               <ThemeToggle />
               <Button
                 variant="ghost"

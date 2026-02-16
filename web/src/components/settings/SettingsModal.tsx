@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Key, Server, Github, Download, Upload, RotateCcw, Eye, EyeOff, HelpCircle } from 'lucide-react'
+import { Key, Server, Github, Download, Upload, RotateCcw, Eye, EyeOff, HelpCircle, Shield, LogOut } from 'lucide-react'
 import { Modal, Button, Input, Select, Card, CardTitle, CardContent } from '../common'
 import { useSettings } from '../../context/SettingsContext'
 import { useExportImport } from '../../hooks/useExportImport'
+import { useReviewer } from '../../context/ReviewerContext'
 import { LLM_PROVIDERS, DEFAULT_SETTINGS, PROVIDER_MODELS, type AppSettings, type LLMProvider } from '../../types/settings'
 
 interface SettingsModalProps {
@@ -13,6 +14,7 @@ interface SettingsModalProps {
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { settings, updateSettings, resetSettings, isProviderConfigured, setShowOnboarding, setOnboardingComplete } = useSettings()
   const { handleExport, triggerFileInput, isExporting, isImporting } = useExportImport()
+  const { isReviewer, reviewer, provider: reviewerProvider, clearReviewerSession } = useReviewer()
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings)
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({})
   const [showGithubToken, setShowGithubToken] = useState(false)
@@ -136,6 +138,39 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
     >
       <div className="space-y-6">
+        {/* Reviewer Mode Banner */}
+        {isReviewer && reviewer && (
+          <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <div className="flex items-start gap-3">
+              <Shield className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="font-medium text-amber-800 dark:text-amber-300 mb-1">
+                  Reviewer Access Mode
+                </h4>
+                <p className="text-sm text-amber-700 dark:text-amber-400 mb-2">
+                  Welcome, <strong>{reviewer.name}</strong>! You have pre-configured LLM access.
+                </p>
+                <div className="text-sm text-amber-600 dark:text-amber-400/80 space-y-1">
+                  <p>• Provider: <strong>{reviewerProvider?.name?.toUpperCase()}</strong></p>
+                  <p>• Model: <strong>{reviewerProvider?.model}</strong></p>
+                  <p>• No provider API key configuration needed</p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Exit reviewer mode? You will need to use the reviewer URL to re-authenticate.')) {
+                      clearReviewerSession()
+                    }
+                  }}
+                  className="mt-3 flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400 hover:underline"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Exit Reviewer Mode
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Security Notice */}
         <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
           <p className="text-sm text-green-800 dark:text-green-300">

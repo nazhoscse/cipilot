@@ -446,10 +446,23 @@ GENERATED {target_ci.upper()} CONFIG:
 ---
 
 === VERIFICATION TASK ===
-Check THREE things:
+Check FOUR things:
 1. Source functionality is preserved (nothing critical missing)
 2. No HALLUCINATED/INVENTED steps were added (nothing fabricated)
 3. VERSION NUMBERS are preserved when converting Docker images to setup actions
+4. Docker containers/images are properly preserved (CRITICAL!)
+
+=== CRITICAL: DOCKER CONTAINER PRESERVATION ===
+When source uses a Docker image (CircleCI docker:, GitLab image:, etc.):
+- GitHub Actions MUST use EITHER:
+  a) `container: image: <same-image>` under the job, OR
+  b) A setup action (setup-go, setup-python, etc.) WITH the exact version from the image
+- If source specifies `docker: - image: X` and generated GitHub Actions has NEITHER container: nor setup action with version → FAIL
+
+Examples:
+- Source: `docker: - image: cimg/go:1.12.9` → MUST have `container: image: cimg/go:1.12.9` OR `setup-go` with `go-version: '1.12.9'`
+- Source: `docker: - image: python:3.9` → MUST have `container: image: python:3.9` OR `setup-python` with `python-version: '3.9'`
+- Source: `docker: - image: cirq/go:1.12.9` → MISSING `container:` AND MISSING `setup-go` → FAIL
 
 === CRITICAL: VERSION PRESERVATION ===
 When source uses a Docker image with a specific version (e.g., cimg/go:1.12.9, python:3.9, node:18):
@@ -462,11 +475,17 @@ When source uses a Docker image with a specific version (e.g., cimg/go:1.12.9, p
 ✓ Shell commands / scripts - are they preserved?
 ✓ Environment variables - are they all present?
 ✓ Services (databases, caches) - preserved if in source?
-✓ Docker images / containers - either kept as container OR converted with EXACT version
+✓ Docker images / containers - MUST be preserved as `container:` OR converted with setup action + EXACT version
 ✓ Build matrix / strategy - preserved if in source?
 ✓ Triggers (push, PR, schedule, tags) - approximately equivalent?
 ✓ Artifacts upload/download - preserved if in source?
 ✓ Cache configurations - preserved if explicitly in source?
+
+=== DOCKER IMAGE HANDLING (CRITICAL) ===
+If source has docker/image config but generated GitHub Actions has NEITHER:
+- `container: image: X` keyword, NOR
+- A matching setup action with version
+→ Then FAIL and add "Docker image X not preserved" to missing_features
 
 === ALLOWED ADDITIONS (NOT hallucinations - do NOT list these) ===
 ✅ actions/checkout@v4 - REQUIRED for GitHub Actions, NEVER list as hallucination
@@ -479,6 +498,7 @@ IMPORTANT: Do NOT include checkout or setup actions in hallucinated_steps list!
 
 === FAIL CONDITIONS (CRITICAL - must fail for these) ===
 ❌ FAIL if SOURCE functionality is MISSING from generated
+❌ FAIL if Docker image is specified in source but NOT preserved in generated (no container: and no setup action with version)
 ❌ FAIL if Docker image version is NOT preserved (e.g., source has go:1.12.9, generated has setup-go WITHOUT go-version: '1.12.9')
 ❌ FAIL if generated has INVENTED steps not in source (excluding checkout/setup):
    - Random tool checks like 'which X' or 'verify X' when not in source

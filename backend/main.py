@@ -11,6 +11,10 @@ from models import (
 from llm_converter import convert_pipeline, semantic_verify_migration
 from agentic_pipeline import run_conversion_pipeline
 from analytics import analytics_service
+from reviewer_utils import (
+    decrypt_reviewer_token, hash_token, get_reviewer_provider_config,
+    is_reviewer_access_enabled, generate_reviewer_token
+)
 import uvicorn
 import tempfile
 import subprocess
@@ -1557,7 +1561,286 @@ async def check_user_rating(session_id: str):
         return result
     except Exception as e:
         return {"has_rated": False, "error": str(e)}
+
+
+# ============================================================================
+# Reviewer Access Endpoints
+# ============================================================================
+
+class ReviewerValidateRequest(BaseModel):
+    token: str
+
+
+class ReviewerConvertRequest(BaseModel):
+    """Conversion request using reviewer's pre-configured provider"""
+    reviewer_id: str
+    source_yaml: str
+    source_ci: str
+    target_ci: str
+    repo_url: Optional[str] = None
+
+
+@app.post("/reviewer/validate")
+async def validate_reviewer_token(request: Request, req: ReviewerValidateRequest):
+    """
+    Validate a reviewer access token and create/update session.
+    Returns reviewer info and provider config (without API key).
+    """
+    # Check if reviewer access is enabled
+    if not is_reviewer_access_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Reviewer access is not configured on this server"
+        )
+    
+    # Decrypt and validate token
+    payload = decrypt_reviewer_token(req.token)
+    if not payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired reviewer token"
+        )
+    
+    reviewer_id = payload.get("reviewer_id")
+    reviewer_name = payload.get("name")
+    expires_at = payload.get("expires")
+    
+    # Get client info
+    ip_address = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    if "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "unknown")
+    
+    # Create or update reviewer session
+    try:
+        session_result = await analytics_service._repository.create_or_update_reviewer_session(
+            reviewer_id=reviewer_id,
+            reviewer_name=reviewer_name,
+            token_hash=hash_token(req.token),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            expires_at=expires_at
+        )
+    except Exception as e:
+        print(f"[REVIEWER] Failed to create session: {e}")
+        session_result = {"success": False}
+    
+    # Get provider config (without exposing API key)
+    provider_config = get_reviewer_provider_config()
+    
+    return {
+        "success": True,
+        "reviewer": {
+            "id": reviewer_id,
+            "name": reviewer_name,
+            "expires_at": expires_at
+        },
+        "provider": {
+            "name": provider_config.get("provider") if provider_config else None,
+            "model": provider_config.get("model") if provider_config else None,
+            # API key NOT exposed to frontend
+        },
+        "access_count": session_result.get("access_count", 1)
+    }
+
+
+@app.get("/reviewer/session/{reviewer_id}")
+async def get_reviewer_session(reviewer_id: str):
+    """Get reviewer session info and stats"""
+    try:
+        session = await analytics_service._repository.get_reviewer_session(reviewer_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Reviewer session not found")
+        
+        stats = await analytics_service._repository.get_reviewer_stats(reviewer_id)
+        
+        return {
+            "session": session,
+            "stats": stats
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reviewer/convert")
+async def reviewer_convert(request: Request, req: ReviewerConvertRequest, background_tasks: BackgroundTasks):
+    """
+    Convert CI/CD config using reviewer's pre-configured provider.
+    Uses server-side API key - reviewer doesn't need to provide one.
+    """
+    # Verify reviewer access is enabled and get provider config
+    provider_config = get_reviewer_provider_config()
+    if not provider_config:
+        raise HTTPException(
+            status_code=503,
+            detail="Reviewer provider is not configured"
+        )
+    
+    # Verify reviewer session exists
+    session = await analytics_service._repository.get_reviewer_session(req.reviewer_id)
+    if not session:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid reviewer session"
+        )
+    
+    # Update reviewer activity
+    ip_address = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    if "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    await analytics_service._repository.update_reviewer_activity(req.reviewer_id, ip_address)
+    
+    # Get server-side credentials
+    provider = provider_config.get("provider", "xai")
+    model = provider_config.get("model", "grok-beta")
+    api_key = provider_config.get("api_key")
+    
+    # Perform conversion using standard pipeline
+    try:
+        converted_yaml = convert_pipeline(
+            provider=provider,
+            model=model,
+            source_ci=req.source_ci,
+            target_ci=req.target_ci,
+            content=req.source_yaml,
+            api_key=api_key,
+        )
+        
+        # Validate the YAML output
+        yaml_ok, yaml_error = _validate_yaml(converted_yaml)
+        
+        # Run actionlint if target is GitHub Actions
+        validation = None
+        double_check_ok = None
+        double_check_reasons = None
+        
+        if req.target_ci == "github-actions" and yaml_ok:
+            validation = _validate_github_actions_yaml(converted_yaml)
+            
+            # Run semantic double-check if YAML and lint passed
+            if validation.yamlOk and validation.actionlintOk:
+                try:
+                    double_check_ok, double_check_reasons = _semantic_double_check(
+                        source_config=req.source_yaml,
+                        generated_config=converted_yaml,
+                        source_ci=req.source_ci,
+                        target_ci=req.target_ci,
+                        provider=provider,
+                        model=model,
+                        api_key=api_key,
+                    )
+                    # Update validation with double-check results
+                    validation = ValidationResult(
+                        yamlOk=validation.yamlOk,
+                        yamlError=validation.yamlError,
+                        actionlintOk=validation.actionlintOk,
+                        actionlintOutput=validation.actionlintOutput,
+                        doubleCheckOk=double_check_ok,
+                        doubleCheckReasons=double_check_reasons,
+                        doubleCheckSkipped=False,
+                    )
+                except Exception as e:
+                    print(f"[REVIEWER] Double-check failed: {e}")
+                    validation = ValidationResult(
+                        yamlOk=validation.yamlOk,
+                        yamlError=validation.yamlError,
+                        actionlintOk=validation.actionlintOk,
+                        actionlintOutput=validation.actionlintOutput,
+                        doubleCheckOk=None,
+                        doubleCheckReasons=None,
+                        doubleCheckSkipped=True,
+                    )
+        
+        # Log the migration with reviewer_id
+        analytics_ctx = _get_analytics_context(request)
+        user_id, session_id = await _get_or_create_session(analytics_ctx)
+        
+        background_tasks.add_task(
+            analytics_service.log_migration,
+            user_id=user_id,
+            session_id=session_id,
+            repo_owner=req.repo_url.split("/")[-2] if req.repo_url and "/" in req.repo_url else "unknown",
+            repo_name=req.repo_url.split("/")[-1] if req.repo_url and "/" in req.repo_url else "unknown",
+            repo_branch="main",
+            source_ci_services=[req.source_ci],
+            target_platform=req.target_ci,
+            source_yaml=req.source_yaml,
+            converted_yaml=converted_yaml,
+            provider_used=provider,
+            model_used=model,
+            attempts=1,
+            validation_yaml_ok=yaml_ok,
+            validation_lint_ok=validation.actionlintOk if validation else None,
+            validation_double_check_ok=double_check_ok,
+            final_status="success" if yaml_ok else "failed",
+            processing_time_ms=0,
+            reviewer_id=req.reviewer_id,
+        )
+        
+        return {
+            "status": "success",
+            "convertedConfig": converted_yaml,
+            "yamlOk": yaml_ok,
+            "yamlError": yaml_error,
+            "validation": validation.model_dump() if validation else None,
+            "provider": provider,
+            "model": model,
+            "reviewerId": req.reviewer_id,
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Conversion failed: {str(e)}"
+        )
+
+
+@app.get("/reviewer/status")
+async def reviewer_access_status():
+    """Check if reviewer access is enabled on this server"""
+    enabled = is_reviewer_access_enabled()
+    provider_config = get_reviewer_provider_config()
+    
+    return {
+        "enabled": enabled,
+        "provider": provider_config.get("provider") if provider_config else None,
+        "model": provider_config.get("model") if provider_config else None
+    }
+
+
+# Admin endpoint to generate tokens (protected - only works with admin secret)
+@app.post("/reviewer/generate-token")
+async def generate_token_endpoint(
+    reviewer_id: str,
+    reviewer_name: str,
+    days_valid: int = 30,
+    admin_secret: str = None
+):
+    """
+    Generate a reviewer access token.
+    Protected by admin secret environment variable.
+    """
+    expected_secret = os.getenv("ADMIN_SECRET", "")
+    if not expected_secret or admin_secret != expected_secret:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    token = generate_reviewer_token(reviewer_id, reviewer_name, days_valid)
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail="Reviewer access is not configured"
+        )
+    
+    return {
+        "token": token,
+        "reviewer_id": reviewer_id,
+        "reviewer_name": reviewer_name,
+        "days_valid": days_valid,
+        "url": f"/review/{token}"
+    }
         
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5200, reload=True) 
+    uvicorn.run("main:app", host="0.0.0.0", port=5200, reload=True)

@@ -5,6 +5,7 @@ import { OnboardingGuide } from './components/common'
 import { HomePage } from './pages/HomePage'
 import { HistoryPage } from './pages/HistoryPage'
 import { NotFoundPage } from './pages/NotFoundPage'
+import { ReviewerAccessPage } from './pages/ReviewerAccessPage'
 import { useSettings } from './context/SettingsContext'
 import { initAnalyticsSession } from './utils/analytics'
 
@@ -43,13 +44,21 @@ function App() {
         onSkip={handleOnboardingSkip}
         startStep={onboardingStartStep}
       />
-      <AppLayout>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </AppLayout>
+      <Routes>
+        {/* Reviewer access page - outside AppLayout for clean landing */}
+        <Route path="/review/:token" element={<ReviewerAccessPage />} />
+        
+        {/* Main app routes with layout */}
+        <Route path="/*" element={
+          <AppLayout>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/history" element={<HistoryPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </AppLayout>
+        } />
+      </Routes>
     </>
   )
 }

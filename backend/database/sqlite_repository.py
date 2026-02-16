@@ -175,6 +175,22 @@ class SQLiteRepository(BaseRepository):
             )
         """)
         
+        # Reviewer sessions table - tracks reviewer access
+        await self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS reviewer_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reviewer_id TEXT UNIQUE NOT NULL,
+                reviewer_name TEXT,
+                token_hash TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                access_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+        """)
+        
         # Create indexes for common queries
         await self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id)"
@@ -199,6 +215,9 @@ class SQLiteRepository(BaseRepository):
         )
         await self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_ratings_session_id ON ratings(session_id)"
+        )
+        await self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reviewer_sessions_id ON reviewer_sessions(reviewer_id)"
         )
     
     async def _run_migrations(self) -> None:
@@ -239,6 +258,39 @@ class SQLiteRepository(BaseRepository):
                 "UPDATE user_sessions SET last_activity_at = created_at WHERE last_activity_at IS NULL"
             )
             print("[DATABASE] Added last_activity_at column to user_sessions")
+        
+        # Add reviewer_id to migration_logs if not exists
+        if 'reviewer_id' not in column_names:
+            await self._connection.execute(
+                "ALTER TABLE migration_logs ADD COLUMN reviewer_id TEXT"
+            )
+            print("[DATABASE] Added reviewer_id column to migration_logs")
+        
+        # Add reviewer_id to detection_logs if not exists
+        async with self._connection.execute(
+            "PRAGMA table_info(detection_logs)"
+        ) as cursor:
+            detection_columns = await cursor.fetchall()
+            detection_column_names = [col[1] for col in detection_columns]
+        
+        if 'reviewer_id' not in detection_column_names:
+            await self._connection.execute(
+                "ALTER TABLE detection_logs ADD COLUMN reviewer_id TEXT"
+            )
+            print("[DATABASE] Added reviewer_id column to detection_logs")
+        
+        # Add reviewer_id to analytics_events if not exists
+        async with self._connection.execute(
+            "PRAGMA table_info(analytics_events)"
+        ) as cursor:
+            event_columns = await cursor.fetchall()
+            event_column_names = [col[1] for col in event_columns]
+        
+        if 'reviewer_id' not in event_column_names:
+            await self._connection.execute(
+                "ALTER TABLE analytics_events ADD COLUMN reviewer_id TEXT"
+            )
+            print("[DATABASE] Added reviewer_id column to analytics_events")
     
     async def close(self) -> None:
         """Close database connection"""
@@ -391,14 +443,15 @@ class SQLiteRepository(BaseRepository):
         
         cursor = await self._connection.execute(
             """INSERT INTO migration_logs 
-               (user_id, session_id, repo_owner, repo_name, repo_branch, repo_full_name,
+               (user_id, session_id, reviewer_id, repo_owner, repo_name, repo_branch, repo_full_name,
                 source_ci_services, target_platform, source_yaml, converted_yaml,
                 provider_used, model_used, attempts, validation_yaml_ok, validation_lint_ok,
                 validation_double_check_ok, final_status, processing_time_ms, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 log.user_id,
                 log.session_id,
+                log.reviewer_id,
                 log.repo_owner,
                 log.repo_name,
                 log.repo_branch,
@@ -519,12 +572,13 @@ class SQLiteRepository(BaseRepository):
         
         cursor = await self._connection.execute(
             """INSERT INTO detection_logs 
-               (user_id, session_id, repo_owner, repo_name, repo_branch, repo_full_name,
+               (user_id, session_id, reviewer_id, repo_owner, repo_name, repo_branch, repo_full_name,
                 detected_services, detection_count, detection_source, detection_data, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 log.user_id,
                 log.session_id,
+                log.reviewer_id,
                 log.repo_owner,
                 log.repo_name,
                 log.repo_branch,
@@ -714,3 +768,159 @@ class SQLiteRepository(BaseRepository):
             return {"has_rated": False}
         except Exception as e:
             return {"has_rated": False, "error": str(e)}
+
+    # ============================================================================
+    # Reviewer Session Methods
+    # ============================================================================
+    
+    async def create_or_update_reviewer_session(
+        self,
+        reviewer_id: str,
+        reviewer_name: str,
+        token_hash: str,
+        ip_address: str,
+        user_agent: str,
+        expires_at: str
+    ) -> dict:
+        """Create or update a reviewer session"""
+        try:
+            # Check if reviewer session exists
+            async with self._connection.execute(
+                "SELECT id, access_count FROM reviewer_sessions WHERE reviewer_id = ?",
+                (reviewer_id,)
+            ) as cursor:
+                existing = await cursor.fetchone()
+            
+            now = datetime.utcnow().isoformat()
+            
+            if existing:
+                # Update existing session
+                await self._connection.execute(
+                    """UPDATE reviewer_sessions 
+                       SET ip_address = ?, user_agent = ?, access_count = access_count + 1,
+                           last_activity_at = ?, token_hash = ?, expires_at = ?
+                       WHERE reviewer_id = ?""",
+                    (ip_address, user_agent, now, token_hash, expires_at, reviewer_id)
+                )
+                access_count = existing[1] + 1
+            else:
+                # Insert new session
+                await self._connection.execute(
+                    """INSERT INTO reviewer_sessions 
+                       (reviewer_id, reviewer_name, token_hash, ip_address, user_agent, 
+                        access_count, created_at, last_activity_at, expires_at)
+                       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+                    (reviewer_id, reviewer_name, token_hash, ip_address, user_agent,
+                     now, now, expires_at)
+                )
+                access_count = 1
+            
+            await self._connection.commit()
+            return {
+                "success": True,
+                "reviewer_id": reviewer_id,
+                "reviewer_name": reviewer_name,
+                "access_count": access_count
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    async def get_reviewer_session(self, reviewer_id: str) -> dict | None:
+        """Get reviewer session info"""
+        try:
+            async with self._connection.execute(
+                """SELECT reviewer_id, reviewer_name, ip_address, access_count,
+                          created_at, last_activity_at, expires_at
+                   FROM reviewer_sessions WHERE reviewer_id = ?""",
+                (reviewer_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+            
+            if row:
+                return {
+                    "reviewer_id": row[0],
+                    "reviewer_name": row[1],
+                    "ip_address": row[2],
+                    "access_count": row[3],
+                    "created_at": row[4],
+                    "last_activity_at": row[5],
+                    "expires_at": row[6]
+                }
+            return None
+        except Exception:
+            return None
+    
+    async def update_reviewer_activity(self, reviewer_id: str, ip_address: str = None) -> None:
+        """Update reviewer's last activity timestamp"""
+        try:
+            now = datetime.utcnow().isoformat()
+            if ip_address:
+                await self._connection.execute(
+                    """UPDATE reviewer_sessions 
+                       SET last_activity_at = ?, ip_address = ?
+                       WHERE reviewer_id = ?""",
+                    (now, ip_address, reviewer_id)
+                )
+            else:
+                await self._connection.execute(
+                    "UPDATE reviewer_sessions SET last_activity_at = ? WHERE reviewer_id = ?",
+                    (now, reviewer_id)
+                )
+            await self._connection.commit()
+        except Exception:
+            pass
+    
+    async def get_all_reviewer_sessions(self) -> list:
+        """Get all reviewer sessions for admin view"""
+        try:
+            async with self._connection.execute(
+                """SELECT reviewer_id, reviewer_name, ip_address, access_count,
+                          created_at, last_activity_at, expires_at
+                   FROM reviewer_sessions ORDER BY last_activity_at DESC"""
+            ) as cursor:
+                rows = await cursor.fetchall()
+            
+            return [
+                {
+                    "reviewer_id": row[0],
+                    "reviewer_name": row[1],
+                    "ip_address": row[2],
+                    "access_count": row[3],
+                    "created_at": row[4],
+                    "last_activity_at": row[5],
+                    "expires_at": row[6]
+                }
+                for row in rows
+            ]
+        except Exception:
+            return []
+    
+    async def get_reviewer_stats(self, reviewer_id: str) -> dict:
+        """Get statistics for a specific reviewer"""
+        try:
+            # Get migration count
+            async with self._connection.execute(
+                "SELECT COUNT(*) FROM migration_logs WHERE reviewer_id = ?",
+                (reviewer_id,)
+            ) as cursor:
+                migration_count = (await cursor.fetchone())[0]
+            
+            # Get detection count
+            async with self._connection.execute(
+                "SELECT COUNT(*) FROM detection_logs WHERE reviewer_id = ?",
+                (reviewer_id,)
+            ) as cursor:
+                detection_count = (await cursor.fetchone())[0]
+            
+            # Get session info
+            session = await self.get_reviewer_session(reviewer_id)
+            
+            return {
+                "reviewer_id": reviewer_id,
+                "migration_count": migration_count,
+                "detection_count": detection_count,
+                "access_count": session.get("access_count", 0) if session else 0,
+                "last_activity": session.get("last_activity_at") if session else None
+            }
+        except Exception as e:
+            return {"error": str(e)}

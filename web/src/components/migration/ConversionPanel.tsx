@@ -17,8 +17,10 @@ import { PRCreationDialog } from './PRCreationDialog'
 import { useMigration } from '../../context/MigrationContext'
 import { useSettings } from '../../context/SettingsContext'
 import { useToast } from '../../context/ToastContext'
+import { useReviewer } from '../../context/ReviewerContext'
 import { useMigrationHistory, triggerHistoryRefresh } from '../../hooks/useMigrationHistory'
 import { cicdApi, buildConversionRequest } from '../../api/cicd'
+import { reviewerApi } from '../../api/reviewer'
 import { githubProxyApi } from '../../api/githubProxy'
 import { ratingApi } from '../../api/rating'
 import type { MigrationHistoryItem } from '../../types/migration'
@@ -52,6 +54,7 @@ const CI_CONFIG_PATHS: Record<string, { paths: string[]; name: string; isFolder?
 export function ConversionPanel() {
   const { state, setEditedYaml, setConversionResult, setError, setStep, setFetchedConfigs } = useMigration()
   const { getCurrentLLMSettings, settings, startOnboardingAtStep } = useSettings()
+  const { isReviewer, reviewer, provider: reviewerProvider } = useReviewer()
   const toast = useToast()
   const { saveMigration, updateMigration } = useMigrationHistory()
 
@@ -377,21 +380,61 @@ export function ConversionPanel() {
         }
       }
 
-      const request = buildConversionRequest(
-        repository,
-        selectedServices,
-        selectedConfigs,
-        llmSettings
-      )
+      // Combine all source configs into single YAML
+      const sourceYaml = Object.entries(selectedConfigs)
+        .map(([key, content]) => `# Source: ${key}\n${content}`)
+        .join('\n\n')
 
-      const result = await cicdApi.convert(request)
+      let result
+      let providerUsed: string
+      let modelUsed: string
+
+      // Use reviewer API if in reviewer mode, otherwise use standard API
+      if (isReviewer && reviewer) {
+        // Use reviewer's pre-configured provider
+        const reviewerResult = await reviewerApi.convert({
+          reviewer_id: reviewer.id,
+          source_yaml: sourceYaml,
+          source_ci: selectedServices.join(', '),
+          target_ci: 'github-actions',
+          repo_url: `https://github.com/${repository.owner}/${repository.name}`,
+        })
+        
+        result = {
+          convertedConfig: reviewerResult.convertedConfig,
+          validation: reviewerResult.validation ? {
+            yamlOk: reviewerResult.validation.yamlOk,
+            yamlError: reviewerResult.validation.yamlError || undefined,
+            actionlintOk: reviewerResult.validation.actionlintOk,
+            actionlintOutput: reviewerResult.validation.actionlintOutput || undefined,
+            doubleCheckOk: reviewerResult.validation.doubleCheckOk ?? undefined,
+            doubleCheckReasons: reviewerResult.validation.doubleCheckReasons || undefined,
+            doubleCheckSkipped: reviewerResult.validation.doubleCheckSkipped ?? false,
+          } : undefined,
+          attempts: 1,
+        }
+        providerUsed = reviewerProvider?.name || 'xai'
+        modelUsed = reviewerProvider?.model || 'grok-beta'
+      } else {
+        // Use standard API with user's LLM settings
+        const request = buildConversionRequest(
+          repository,
+          selectedServices,
+          selectedConfigs,
+          llmSettings
+        )
+        const standardResult = await cicdApi.convert(request)
+        result = standardResult
+        providerUsed = result.providerUsed || llmSettings.provider
+        modelUsed = result.modelUsed || llmSettings.model
+      }
 
       setConversionResult({
         convertedConfig: result.convertedConfig,
         validation: result.validation,
         attempts: result.attempts,
-        providerUsed: result.providerUsed,
-        modelUsed: result.modelUsed,
+        providerUsed,
+        modelUsed,
       })
 
       setStep('review')
@@ -408,8 +451,8 @@ export function ConversionPanel() {
         originalConfigs: selectedConfigs,
         convertedConfig: result.convertedConfig,
         validation: result.validation,
-        llmProvider: llmSettings.provider,
-        llmModel: llmSettings.model,
+        llmProvider: providerUsed,
+        llmModel: modelUsed,
         attempts: result.attempts,
         manualRetries: 0,
         status: result.validation?.yamlOk && result.validation?.actionlintOk ? 'validated' : 'draft',
@@ -729,7 +772,7 @@ export function ConversionPanel() {
                   Converting CI/CD Configuration
                 </h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
-                  Using <span className="text-primary-500 font-medium">{settings.llmProvider}</span> ({settings.llmModel})
+                  Using <span className="text-primary-500 font-medium">{isReviewer && reviewerProvider ? reviewerProvider.name : settings.llmProvider}</span> ({isReviewer && reviewerProvider ? reviewerProvider.model : settings.llmModel})
                 </p>
 
                 {/* Progress steps */}
@@ -787,7 +830,7 @@ export function ConversionPanel() {
                 Retrying Conversion
               </h3>
               <p className="text-sm text-[var(--text-secondary)] mb-4">
-                Using <span className="text-primary-500 font-medium">{settings.llmProvider}</span> ({settings.llmModel})
+                Using <span className="text-primary-500 font-medium">{isReviewer && reviewerProvider ? reviewerProvider.name : settings.llmProvider}</span> ({isReviewer && reviewerProvider ? reviewerProvider.model : settings.llmModel})
               </p>
 
               {/* Progress steps */}

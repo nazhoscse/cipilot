@@ -5,6 +5,7 @@ import App from './App'
 import { ThemeProvider } from './context/ThemeContext'
 import { SettingsProvider } from './context/SettingsContext'
 import { ToastProvider } from './context/ToastContext'
+import { ReviewerProvider } from './context/ReviewerContext'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -13,7 +14,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ThemeProvider>
         <SettingsProvider>
           <ToastProvider>
-            <App />
+            <ReviewerProvider>
+              <App />
+            </ReviewerProvider>
           </ToastProvider>
         </SettingsProvider>
       </ThemeProvider>

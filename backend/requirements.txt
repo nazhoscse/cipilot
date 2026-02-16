@@ -9,3 +9,4 @@ aiosqlite
 user-agents
 python-dotenv
 httpx
+cryptography

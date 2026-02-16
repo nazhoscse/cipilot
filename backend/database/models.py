@@ -41,6 +41,7 @@ class MigrationLogRecord(BaseModel):
     id: Optional[int] = None  # Auto-generated
     user_id: Optional[str] = None
     session_id: Optional[int] = None
+    reviewer_id: Optional[str] = None  # For reviewer access tracking
     
     # Repository info
     repo_owner: Optional[str] = None
@@ -77,6 +78,7 @@ class DetectionLogRecord(BaseModel):
     id: Optional[int] = None  # Auto-generated
     user_id: Optional[str] = None
     session_id: Optional[int] = None  # Links to user_sessions - same session for detect→migrate→retry
+    reviewer_id: Optional[str] = None  # For reviewer access tracking
     
     # Repository context
     repo_owner: Optional[str] = None
@@ -99,6 +101,7 @@ class AnalyticsEvent(BaseModel):
     id: Optional[int] = None
     user_id: Optional[str] = None
     session_id: Optional[int] = None
+    reviewer_id: Optional[str] = None  # For reviewer access tracking
     event_type: str  # e.g., "page_view", "conversion_started", "validation_clicked"
     event_data: Optional[dict] = None  # JSON blob for flexible data
     created_at: datetime = Field(default_factory=datetime.utcnow)
