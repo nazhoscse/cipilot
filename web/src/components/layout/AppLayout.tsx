@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Header } from './Header'
+import { Footer } from './Footer'
 import { Sidebar } from './Sidebar'
 import { ToastContainer } from '../common'
 import { MigrationProvider } from '../../context/MigrationContext'
@@ -29,6 +30,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </main>
         </div>
 
+        <Footer />
         <ToastContainer />
       </div>
     </MigrationProvider>

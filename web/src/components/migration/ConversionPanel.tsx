@@ -8,7 +8,7 @@ import {
   AlertCircle,
   Loader2,
 } from 'lucide-react'
-import { Button, Card } from '../common'
+import { Button, Card, RatingModal } from '../common'
 import { CIServiceChips } from './CIServiceChips'
 import { DiffViewer } from './DiffViewer'
 import { ValidationStatus } from './ValidationStatus'
@@ -20,6 +20,7 @@ import { useToast } from '../../context/ToastContext'
 import { useMigrationHistory, triggerHistoryRefresh } from '../../hooks/useMigrationHistory'
 import { cicdApi, buildConversionRequest } from '../../api/cicd'
 import { githubProxyApi } from '../../api/githubProxy'
+import { ratingApi } from '../../api/rating'
 import type { MigrationHistoryItem } from '../../types/migration'
 
 // Step index for "Configure AI Provider" in the onboarding guide
@@ -56,6 +57,7 @@ export function ConversionPanel() {
 
   const [retryDialogOpen, setRetryDialogOpen] = useState(false)
   const [prDialogOpen, setPrDialogOpen] = useState(false)
+  const [ratingModalOpen, setRatingModalOpen] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isConverting, setIsConverting] = useState(false)
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null)
@@ -891,11 +893,26 @@ export function ConversionPanel() {
         onClose={() => setPrDialogOpen(false)}
         repository={repository}
         yaml={editedYaml || ''}
-        onSuccess={(prUrl) => {
+        onSuccess={async (prUrl) => {
           if (currentHistoryId) {
             updateMigration(currentHistoryId, { prUrl, status: 'pr_created' })
           }
+          // Check if user has already rated, if not, prompt for rating
+          try {
+            const userRating = await ratingApi.checkUserRating()
+            if (!userRating.has_rated) {
+              // Show rating modal after a brief delay
+              setTimeout(() => setRatingModalOpen(true), 1000)
+            }
+          } catch {
+            // Silently fail - rating prompt is non-critical
+          }
         }}
+      />
+
+      <RatingModal
+        isOpen={ratingModalOpen}
+        onClose={() => setRatingModalOpen(false)}
       />
     </div>
   )

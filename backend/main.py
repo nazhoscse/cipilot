@@ -20,7 +20,11 @@ import re
 import os
 import base64
 import httpx
+import sqlite3
+import uuid
+from datetime import datetime
 from typing import Optional, List
+from pydantic import BaseModel
 
 # Load .env file for local development
 load_dotenv()
@@ -29,6 +33,47 @@ try:
     import yaml  # PyYAML
 except Exception:  # pragma: no cover
     yaml = None
+
+
+# ============================================================================
+# Rating System - SQLite Database
+# ============================================================================
+
+RATINGS_DB_PATH = os.path.join(os.path.dirname(__file__), "ratings.db")
+
+
+def init_ratings_db():
+    """Initialize the ratings SQLite database"""
+    conn = sqlite3.connect(RATINGS_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            score INTEGER NOT NULL CHECK (score >= 1 AND score <= 5),
+            feedback TEXT,
+            session_id TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_id ON ratings(session_id)")
+    conn.commit()
+    conn.close()
+
+
+# Initialize ratings DB on import
+init_ratings_db()
+
+
+class RatingSubmitRequest(BaseModel):
+    score: int  # 1-5 stars
+    feedback: Optional[str] = None
+    session_id: str  # Browser session ID to prevent duplicate votes
+
+
+class RatingStats(BaseModel):
+    average: float
+    total_votes: int
+    distribution: dict  # {1: count, 2: count, ...}
 
 
 # Lifespan for startup/shutdown events
@@ -40,6 +85,10 @@ async def lifespan(app: FastAPI):
         print("[STARTUP] Analytics service initialized")
     except Exception as e:
         print(f"[STARTUP] Analytics initialization failed (non-critical): {e}")
+    
+    # Ensure ratings DB is initialized
+    init_ratings_db()
+    print("[STARTUP] Ratings database initialized")
     
     yield
     
@@ -1483,6 +1532,113 @@ async def create_pull_request(req: GitHubCreatePRRequest, request: Request):
             success=False,
             error=f"Failed to create pull request: {response.text}"
         )
+
+
+# ============================================================================
+# Rating Endpoints
+# ============================================================================
+
+@app.get("/rating/stats")
+async def get_rating_stats():
+    """Get aggregate rating statistics"""
+    try:
+        conn = sqlite3.connect(RATINGS_DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get total votes and average
+        cursor.execute("SELECT COUNT(*), COALESCE(AVG(score), 0) FROM ratings")
+        total_votes, average = cursor.fetchone()
+        
+        # Get distribution
+        cursor.execute("""
+            SELECT score, COUNT(*) as count 
+            FROM ratings 
+            GROUP BY score 
+            ORDER BY score
+        """)
+        distribution = {i: 0 for i in range(1, 6)}
+        for score, count in cursor.fetchall():
+            distribution[score] = count
+        
+        conn.close()
+        
+        return {
+            "average": round(average, 1) if total_votes > 0 else 0,
+            "total_votes": total_votes,
+            "distribution": distribution
+        }
+    except Exception as e:
+        return {
+            "average": 0,
+            "total_votes": 0,
+            "distribution": {1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
+            "error": str(e)
+        }
+
+
+@app.post("/rating/submit")
+async def submit_rating(req: RatingSubmitRequest):
+    """Submit a rating (one per session)"""
+    # Validate score
+    if req.score < 1 or req.score > 5:
+        raise HTTPException(status_code=400, detail="Score must be between 1 and 5")
+    
+    if not req.session_id:
+        raise HTTPException(status_code=400, detail="Session ID is required")
+    
+    try:
+        conn = sqlite3.connect(RATINGS_DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if this session already submitted a rating
+        cursor.execute("SELECT id, score FROM ratings WHERE session_id = ?", (req.session_id,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing rating
+            cursor.execute("""
+                UPDATE ratings 
+                SET score = ?, feedback = ?, created_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+            """, (req.score, req.feedback, req.session_id))
+            message = "Rating updated successfully"
+        else:
+            # Insert new rating
+            cursor.execute("""
+                INSERT INTO ratings (score, feedback, session_id)
+                VALUES (?, ?, ?)
+            """, (req.score, req.feedback, req.session_id))
+            message = "Rating submitted successfully"
+        
+        conn.commit()
+        conn.close()
+        
+        return {"success": True, "message": message}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Rating already submitted for this session")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to submit rating: {str(e)}")
+
+
+@app.get("/rating/check/{session_id}")
+async def check_user_rating(session_id: str):
+    """Check if a session has already submitted a rating"""
+    try:
+        conn = sqlite3.connect(RATINGS_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT score, feedback FROM ratings WHERE session_id = ?", (session_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                "has_rated": True,
+                "score": result[0],
+                "feedback": result[1]
+            }
+        return {"has_rated": False}
+    except Exception as e:
+        return {"has_rated": False, "error": str(e)}
         
 
 if __name__ == "__main__":
