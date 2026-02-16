@@ -347,12 +347,13 @@ export function ConversionPanel() {
     }
 
     // Check if LLM provider is configured before attempting conversion
+    // Skip this check for reviewers - they use server-side configured provider
     // Ollama doesn't require an API key - it just needs to be running locally
     const llmSettings = getCurrentLLMSettings()
     const isOllama = llmSettings.provider === 'ollama'
     const isProviderConfigured = isOllama || !!llmSettings.apiKey
     
-    if (!isProviderConfigured) {
+    if (!isProviderConfigured && !(isReviewer && reviewer)) {
       toast.warning(
         'LLM Provider Not Configured',
         'Please configure your AI provider in Settings (⚙️) before migrating. Add an API key for Anthropic, OpenAI, or another provider.'
