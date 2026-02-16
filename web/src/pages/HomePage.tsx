@@ -6,7 +6,7 @@ import { Button } from '../components/common'
 import { useMigration } from '../context/MigrationContext'
 import { useSettings } from '../context/SettingsContext'
 import { useToast } from '../context/ToastContext'
-import { cicdApi } from '../api'
+import { cicdApi, githubProxyApi } from '../api'
 import type { Repository } from '../types/api'
 import type { DetectedService, MigrationHistoryItem } from '../types/migration'
 
@@ -64,6 +64,18 @@ export function HomePage() {
 
         // Set repository
         setRepository(historyItem.repository)
+
+        // Helper to get config path for service name (for backwards compatibility with old history items)
+        const getConfigPath = (service: string): string => {
+          const paths: Record<string, string> = {
+            'GitHub Actions': '.github/workflows',
+            'Travis CI': '.travis.yml',
+            'CircleCI': '.circleci',
+            'GitLab CI': '.gitlab-ci.yml',
+            'Jenkins': 'Jenkinsfile',
+          }
+          return paths[service] || 'config.yml'
+        }
 
         // Use detectedServices if available (new format), otherwise fall back to sourceServices (old format)
         const detectedServices: DetectedService[] = historyItem.detectedServices || 
@@ -130,7 +142,7 @@ export function HomePage() {
         const detectedServices: DetectedService[] = []
         const fetchedConfigs: Record<string, string> = {}
 
-        // Try to detect each CI service
+        // Try to detect each CI service using server-side proxy (avoids rate limits)
         for (const [_key, config] of Object.entries(CI_CONFIG_PATHS)) {
           // Skip if already detected this service
           if (detectedServices.find((s) => s.name === config.name)) continue
@@ -139,12 +151,12 @@ export function HomePage() {
             try {
               // Check if it's a folder-based CI config
               if (config.isFolder) {
-                // List directory contents
-                const contents = await fetchGitHubContents(
+                // List directory contents using proxy API
+                const contents = await githubProxyApi.getDirectoryContents(
                   repo.owner,
                   repo.name,
                   path,
-                  settings.githubToken
+                  settings.githubToken || undefined
                 )
 
                 if (Array.isArray(contents) && contents.length > 0) {
@@ -155,14 +167,14 @@ export function HomePage() {
                     url: `https://github.com/${repoWithUrl.owner}/${repoWithUrl.name}/tree/${repoWithUrl.branch}/${path}`,
                   })
 
-                  // Fetch each config file in the folder
+                  // Fetch each config file in the folder using proxy API
                   for (const file of contents) {
                     if (file.type === 'file' && (file.name.endsWith('.yml') || file.name.endsWith('.yaml'))) {
-                      const fileContent = await fetchGitHubFile(
+                      const fileContent = await githubProxyApi.getFileContent(
                         repo.owner,
                         repo.name,
                         file.path,
-                        settings.githubToken
+                        settings.githubToken || undefined
                       )
                       if (fileContent) {
                         fetchedConfigs[`${config.name}:${file.name}`] = fileContent
@@ -172,12 +184,12 @@ export function HomePage() {
                   break // Found this service, move to next
                 }
               } else {
-                // Single file check
-                const content = await fetchGitHubFile(
+                // Single file check using proxy API
+                const content = await githubProxyApi.getFileContent(
                   repo.owner,
                   repo.name,
                   path,
-                  settings.githubToken
+                  settings.githubToken || undefined
                 )
 
                 if (content) {
@@ -190,8 +202,9 @@ export function HomePage() {
                   break // Found this service, move to next
                 }
               }
-            } catch {
-              // File/directory doesn't exist, continue
+            } catch (err) {
+              // Log error but continue - proxy should handle rate limits gracefully
+              console.warn(`Error checking ${config.name}:`, err)
             }
           }
         }
@@ -225,19 +238,12 @@ export function HomePage() {
           })
         }
       } catch (error) {
-        if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {
-          const message = 'GitHub API rate limit exceeded. Please add your GitHub Personal Access Token in Settings to continue browsing repositories.'
-          setDetectError(message)
-          setError(message)
-          setStep('input')
-          toast.error('Rate Limit Exceeded', message)
-        } else {
-          const message = error instanceof Error ? error.message : 'Failed to detect CI services'
-          setDetectError(message)
-          setError(message)
-          setStep('input')
-          toast.error('Detection failed', message)
-        }
+        // Handle errors from the detection process
+        const message = error instanceof Error ? error.message : 'Failed to detect CI services'
+        setDetectError(message)
+        setError(message)
+        setStep('input')
+        toast.error('Detection failed', message)
       } finally {
         setLoading(false)
       }
@@ -296,109 +302,4 @@ export function HomePage() {
       )}
     </div>
   )
-}
-
-// Helper functions to fetch from GitHub
-async function fetchGitHubFile(
-  owner: string,
-  repo: string,
-  path: string,
-  token?: string
-): Promise<string | null> {
-  try {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3.raw',
-    }
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
-    }
-
-    const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-      { headers }
-    )
-
-    if (!response.ok) {
-      // Check for rate limit error
-      if (response.status === 403) {
-        const errorData = await response.json().catch(() => ({}))
-        if (errorData.message?.includes('API rate limit exceeded')) {
-          throw new Error('RATE_LIMIT_EXCEEDED')
-        }
-      }
-      return null
-    }
-
-    return await response.text()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {
-      throw error
-    }
-    return null
-  }
-}
-
-async function fetchGitHubContents(
-  owner: string,
-  repo: string,
-  path: string,
-  token?: string
-): Promise<Array<{ name: string; path: string; type: string }>> {
-  try {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-    }
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
-    }
-
-    const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-      { headers }
-    )
-
-    if (!response.ok) {
-      // Check for rate limit error
-      if (response.status === 403) {
-        const errorData = await response.json().catch(() => ({}))
-        if (errorData.message?.includes('API rate limit exceeded')) {
-          throw new Error('RATE_LIMIT_EXCEEDED')
-        }
-      }
-      return []
-    }
-
-    return await response.json()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {
-      throw error
-    }
-    return []
-  }
-}
-
-// Helper to get config file path for a service name
-function getConfigPath(service: string): string {
-  const paths: Record<string, string> = {
-    'GitHub Actions': '.github/workflows',
-    'Travis CI': '.travis.yml',
-    'CircleCI': '.circleci',
-    'AppVeyor': 'appveyor.yml',
-    'GitLab CI': '.gitlab-ci.yml',
-    'Semaphore': '.semaphore',
-    'Buildkite': '.buildkite',
-    'Azure Pipelines': 'azure-pipelines.yml',
-    'Bitbucket Pipelines': 'bitbucket-pipelines.yml',
-    'Cirrus CI': '.cirrus.yml',
-    'Scrutinizer CI': '.scrutinizer.yml',
-    'Codeship': 'codeship-services.yml',
-    'Wercker': 'wercker.yml',
-    'Bitrise': 'bitrise.yml',
-    'Bamboo': 'bamboo.yml',
-    'GoCD': '.gocd.yaml',
-    'Codemagic': 'codemagic.yaml',
-    'Jenkins': 'Jenkinsfile',
-    'Drone CI': '.drone.yml',
-  }
-  return paths[service] || 'config.yml'
 }

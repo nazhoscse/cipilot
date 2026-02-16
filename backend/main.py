@@ -1113,6 +1113,57 @@ async def github_status():
     }
 
 
+@app.get("/github/contents/{owner}/{repo}/{path:path}")
+async def get_github_contents(owner: str, repo: str, path: str, request: Request, raw: bool = False):
+    """
+    Proxy endpoint to fetch file/directory contents from GitHub.
+    Uses server-side PAT to avoid rate limits for users.
+    
+    Query params:
+    - raw: If true, return raw file content (for files)
+    """
+    token = _get_github_token(request)
+    
+    headers = _get_github_headers(token)
+    if raw:
+        headers["Accept"] = "application/vnd.github.v3.raw"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}",
+            headers=headers,
+            timeout=30.0
+        )
+    
+    if response.status_code == 404:
+        return {"exists": False, "content": None, "type": None}
+    
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+    
+    if raw:
+        return {"exists": True, "content": response.text, "type": "file"}
+    
+    data = response.json()
+    
+    # Directory listing
+    if isinstance(data, list):
+        return {
+            "exists": True,
+            "type": "directory",
+            "contents": [{"name": item["name"], "path": item["path"], "type": item["type"]} for item in data]
+        }
+    
+    # Single file
+    return {
+        "exists": True,
+        "type": "file",
+        "content": data.get("content"),
+        "encoding": data.get("encoding"),
+        "size": data.get("size")
+    }
+
+
 @app.get("/github/user")
 async def get_github_user(request: Request):
     """Get current authenticated GitHub user"""

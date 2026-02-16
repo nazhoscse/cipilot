@@ -73,6 +73,15 @@ interface ServerStatus {
   message: string
 }
 
+interface GitHubContentResponse {
+  exists: boolean
+  type: 'file' | 'directory' | null
+  content?: string
+  encoding?: string
+  size?: number
+  contents?: Array<{ name: string; path: string; type: string }>
+}
+
 // Helper to add user token header if provided
 function getHeaders(userToken?: string): Record<string, string> {
   if (userToken) {
@@ -88,6 +97,78 @@ export const githubProxyApi = {
   async getStatus(): Promise<ServerStatus> {
     const response = await apiClient.get<ServerStatus>('/github/status')
     return response.data
+  },
+
+  /**
+   * Get file contents (raw text) from a repository
+   * Uses server-side PAT to avoid rate limits
+   */
+  async getFileContent(
+    owner: string,
+    repo: string,
+    path: string,
+    userToken?: string
+  ): Promise<string | null> {
+    try {
+      const response = await apiClient.get<GitHubContentResponse>(
+        `/github/contents/${owner}/${repo}/${path}`,
+        { 
+          headers: getHeaders(userToken),
+          params: { raw: true }
+        }
+      )
+      if (response.data.exists && response.data.content) {
+        return response.data.content
+      }
+      return null
+    } catch {
+      return null
+    }
+  },
+
+  /**
+   * Get directory contents from a repository
+   * Uses server-side PAT to avoid rate limits
+   */
+  async getDirectoryContents(
+    owner: string,
+    repo: string,
+    path: string,
+    userToken?: string
+  ): Promise<Array<{ name: string; path: string; type: string }>> {
+    try {
+      const response = await apiClient.get<GitHubContentResponse>(
+        `/github/contents/${owner}/${repo}/${path}`,
+        { headers: getHeaders(userToken) }
+      )
+      if (response.data.exists && response.data.type === 'directory' && response.data.contents) {
+        return response.data.contents
+      }
+      return []
+    } catch {
+      return []
+    }
+  },
+
+  /**
+   * Check if a path exists in a repository
+   * Uses server-side PAT to avoid rate limits
+   */
+  async pathExists(
+    owner: string,
+    repo: string,
+    path: string,
+    userToken?: string
+  ): Promise<boolean> {
+    try {
+      const response = await apiClient.get<GitHubContentResponse>(
+        `/github/contents/${owner}/${repo}/${path}`,
+        { headers: getHeaders(userToken) }
+      )
+      return response.data.exists
+    } catch {
+      return false
+    }
   },
 
   /**

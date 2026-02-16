@@ -48,85 +48,6 @@ const CI_CONFIG_PATHS: Record<string, { paths: string[]; name: string; isFolder?
   drone: { paths: ['.drone.yml'], name: 'Drone CI' },
 }
 
-// Helper functions to fetch from GitHub
-async function fetchGitHubFile(
-  owner: string,
-  repo: string,
-  path: string,
-  token?: string
-): Promise<string | null> {
-  try {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3.raw',
-    }
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
-    }
-
-    const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-      { headers }
-    )
-
-    if (!response.ok) {
-      // Check for rate limit error
-      if (response.status === 403) {
-        const errorData = await response.json().catch(() => ({}))
-        if (errorData.message?.includes('API rate limit exceeded')) {
-          throw new Error('RATE_LIMIT_EXCEEDED')
-        }
-      }
-      return null
-    }
-
-    return await response.text()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {
-      throw error
-    }
-    return null
-  }
-}
-
-async function fetchGitHubContents(
-  owner: string,
-  repo: string,
-  path: string,
-  token?: string
-): Promise<Array<{ name: string; path: string; type: string }>> {
-  try {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-    }
-    if (token) {
-      headers.Authorization = `Bearer ${token}`
-    }
-
-    const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-      { headers }
-    )
-
-    if (!response.ok) {
-      // Check for rate limit error
-      if (response.status === 403) {
-        const errorData = await response.json().catch(() => ({}))
-        if (errorData.message?.includes('API rate limit exceeded')) {
-          throw new Error('RATE_LIMIT_EXCEEDED')
-        }
-      }
-      return []
-    }
-
-    return await response.json()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {
-      throw error
-    }
-    return []
-  }
-}
-
 export function ConversionPanel() {
   const { state, setEditedYaml, setConversionResult, setError, setStep, setFetchedConfigs } = useMigration()
   const { getCurrentLLMSettings, settings, startOnboardingAtStep } = useSettings()
@@ -267,7 +188,7 @@ export function ConversionPanel() {
     })
   }, [setConversionResult, setEditedYaml])
 
-  // Fetch config for a specific service
+  // Fetch config for a specific service (uses server-side GitHub PAT via proxy)
   const handleFetchServiceConfig = useCallback(async (serviceName: string) => {
     if (!repository) return
 
@@ -283,23 +204,23 @@ export function ConversionPanel() {
       const newConfigs: Record<string, string> = { ...fetchedConfigs }
       let foundConfig = false
 
-      // Try to fetch from each possible path
+      // Try to fetch from each possible path using proxy API (uses server-side PAT)
       for (const path of configEntry.paths) {
         try {
           if (configEntry.isFolder) {
-            // Fetch directory contents
-            const contents = await fetchGitHubContents(
+            // Fetch directory contents via proxy
+            const contents = await githubProxyApi.getDirectoryContents(
               repository.owner,
               repository.name,
               path,
-              settings.githubToken
+              settings.githubToken // Optional user token override
             )
 
-            if (Array.isArray(contents) && contents.length > 0) {
+            if (contents.length > 0) {
               // Fetch each config file in the folder
               for (const file of contents) {
                 if (file.type === 'file' && (file.name.endsWith('.yml') || file.name.endsWith('.yaml'))) {
-                  const fileContent = await fetchGitHubFile(
+                  const fileContent = await githubProxyApi.getFileContent(
                     repository.owner,
                     repository.name,
                     file.path,
@@ -314,8 +235,8 @@ export function ConversionPanel() {
               break
             }
           } else {
-            // Fetch single file
-            const content = await fetchGitHubFile(
+            // Fetch single file via proxy
+            const content = await githubProxyApi.getFileContent(
               repository.owner,
               repository.name,
               path,
@@ -341,14 +262,7 @@ export function ConversionPanel() {
         toast.warning('Config not found', `No ${serviceName} configuration found in this repository`)
       }
     } catch (error) {
-      if (error instanceof Error && error.message === 'RATE_LIMIT_EXCEEDED') {
-        toast.error(
-          'GitHub Rate Limit Exceeded',
-          'Please add your GitHub Personal Access Token in Settings to increase your rate limit and continue browsing repositories.'
-        )
-      } else {
-        toast.error('Fetch failed', `Failed to fetch ${serviceName} configuration`)
-      }
+      toast.error('Fetch failed', `Failed to fetch ${serviceName} configuration: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setIsFetchingConfig(false)
     }
@@ -428,9 +342,10 @@ export function ConversionPanel() {
     }
 
     // Check if LLM provider is configured before attempting conversion
-    // Note: Ollama only works locally, so we always require an API key for cloud providers
+    // Ollama doesn't require an API key - it just needs to be running locally
     const llmSettings = getCurrentLLMSettings()
-    const isProviderConfigured = !!llmSettings.apiKey
+    const isOllama = llmSettings.provider === 'ollama'
+    const isProviderConfigured = isOllama || !!llmSettings.apiKey
     
     if (!isProviderConfigured) {
       toast.warning(
