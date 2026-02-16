@@ -6,9 +6,10 @@ interface RatingDisplayProps {
   onRateClick?: () => void
   showRateButton?: boolean
   compact?: boolean
+  refreshKey?: number // Increment this to trigger a refresh
 }
 
-export function RatingDisplay({ onRateClick, showRateButton = true, compact = false }: RatingDisplayProps) {
+export function RatingDisplay({ onRateClick, showRateButton = true, compact = false, refreshKey = 0 }: RatingDisplayProps) {
   const [stats, setStats] = useState<RatingStats | null>(null)
   const [hasRated, setHasRated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -30,21 +31,7 @@ export function RatingDisplay({ onRateClick, showRateButton = true, compact = fa
     }
 
     fetchData()
-  }, [])
-
-  // Refresh stats after rating is submitted
-  const refreshStats = async () => {
-    try {
-      const [statsData, userRating] = await Promise.all([
-        ratingApi.getStats(),
-        ratingApi.checkUserRating(),
-      ])
-      setStats(statsData)
-      setHasRated(userRating.has_rated)
-    } catch {
-      // Silently fail
-    }
-  }
+  }, [refreshKey]) // Re-fetch when refreshKey changes
 
   if (isLoading) {
     return (
@@ -82,11 +69,7 @@ export function RatingDisplay({ onRateClick, showRateButton = true, compact = fa
   if (compact) {
     return (
       <button
-        onClick={() => {
-          onRateClick?.()
-          // Refresh stats when modal might close
-          setTimeout(refreshStats, 2000)
-        }}
+        onClick={onRateClick}
         className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
         title={`${stats?.average || 0} out of 5 stars (${stats?.total_votes || 0} ratings)`}
       >
@@ -113,10 +96,7 @@ export function RatingDisplay({ onRateClick, showRateButton = true, compact = fa
       {/* Rate button */}
       {showRateButton && (
         <button
-          onClick={() => {
-            onRateClick?.()
-            setTimeout(refreshStats, 2000)
-          }}
+          onClick={onRateClick}
           className="text-sm text-[var(--accent-primary)] hover:text-[var(--accent-hover)] hover:underline transition-colors"
         >
           {hasRated ? 'Update your rating' : 'Rate CIPilot'}

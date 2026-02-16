@@ -5,6 +5,12 @@ import { RatingDisplay, RatingModal } from '../common'
 
 export function Footer() {
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false)
+  const [ratingRefreshKey, setRatingRefreshKey] = useState(0)
+
+  const handleRatingSubmitted = () => {
+    // Increment refresh key to trigger RatingDisplay to re-fetch stats
+    setRatingRefreshKey(prev => prev + 1)
+  }
 
   return (
     <>
@@ -40,6 +46,7 @@ export function Footer() {
                   <span className="text-sm text-[var(--text-secondary)]">Rate us:</span>
                   <RatingDisplay
                     compact
+                    refreshKey={ratingRefreshKey}
                     onRateClick={() => setIsRatingModalOpen(true)}
                   />
                 </div>
@@ -74,6 +81,7 @@ export function Footer() {
       <RatingModal
         isOpen={isRatingModalOpen}
         onClose={() => setIsRatingModalOpen(false)}
+        onSubmitted={handleRatingSubmitted}
       />
     </>
   )

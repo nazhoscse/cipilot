@@ -164,6 +164,17 @@ class SQLiteRepository(BaseRepository):
             )
         """)
         
+        # Ratings table - user feedback/ratings for the tool
+        await self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                score INTEGER NOT NULL CHECK (score >= 1 AND score <= 5),
+                feedback TEXT,
+                session_id TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Create indexes for common queries
         await self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id)"
@@ -185,6 +196,9 @@ class SQLiteRepository(BaseRepository):
         )
         await self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON user_sessions(user_id, last_activity_at)"
+        )
+        await self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ratings_session_id ON ratings(session_id)"
         )
     
     async def _run_migrations(self) -> None:
@@ -611,3 +625,92 @@ class SQLiteRepository(BaseRepository):
             return True
         except Exception:
             return False
+
+    # ============================================================================
+    # Rating Methods
+    # ============================================================================
+    
+    async def get_rating_stats(self) -> dict:
+        """Get aggregate rating statistics"""
+        try:
+            # Get total votes and average
+            async with self._connection.execute(
+                "SELECT COUNT(*), COALESCE(AVG(score), 0) FROM ratings"
+            ) as cursor:
+                row = await cursor.fetchone()
+                total_votes = row[0]
+                average = row[1]
+            
+            # Get distribution
+            async with self._connection.execute(
+                """SELECT score, COUNT(*) as count 
+                   FROM ratings 
+                   GROUP BY score 
+                   ORDER BY score"""
+            ) as cursor:
+                distribution = {i: 0 for i in range(1, 6)}
+                async for row in cursor:
+                    distribution[row[0]] = row[1]
+            
+            return {
+                "average": round(average, 1) if total_votes > 0 else 0,
+                "total_votes": total_votes,
+                "distribution": distribution
+            }
+        except Exception as e:
+            return {
+                "average": 0,
+                "total_votes": 0,
+                "distribution": {1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
+                "error": str(e)
+            }
+    
+    async def submit_rating(self, score: int, feedback: str | None, session_id: str) -> dict:
+        """Submit or update a rating"""
+        try:
+            # Check if this session already submitted a rating
+            async with self._connection.execute(
+                "SELECT id, score FROM ratings WHERE session_id = ?", (session_id,)
+            ) as cursor:
+                existing = await cursor.fetchone()
+            
+            if existing:
+                # Update existing rating
+                await self._connection.execute(
+                    """UPDATE ratings 
+                       SET score = ?, feedback = ?, created_at = CURRENT_TIMESTAMP
+                       WHERE session_id = ?""",
+                    (score, feedback, session_id)
+                )
+                message = "Rating updated successfully"
+            else:
+                # Insert new rating
+                await self._connection.execute(
+                    """INSERT INTO ratings (score, feedback, session_id)
+                       VALUES (?, ?, ?)""",
+                    (score, feedback, session_id)
+                )
+                message = "Rating submitted successfully"
+            
+            await self._connection.commit()
+            return {"success": True, "message": message}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    async def check_user_rating(self, session_id: str) -> dict:
+        """Check if a session has already submitted a rating"""
+        try:
+            async with self._connection.execute(
+                "SELECT score, feedback FROM ratings WHERE session_id = ?", (session_id,)
+            ) as cursor:
+                result = await cursor.fetchone()
+            
+            if result:
+                return {
+                    "has_rated": True,
+                    "score": result[0],
+                    "feedback": result[1]
+                }
+            return {"has_rated": False}
+        except Exception as e:
+            return {"has_rated": False, "error": str(e)}
