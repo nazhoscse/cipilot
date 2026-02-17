@@ -13,6 +13,21 @@ from models import RepoInput, DetectionResult, DetectedConfig, StageStatus
 from config import CI_DETECTION_PATTERNS
 
 
+def get_default_branch(repo: RepoInput, github_pat: str) -> Optional[str]:
+    """Get the actual default branch from GitHub API"""
+    headers = {
+        "Authorization": f"token {github_pat}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    try:
+        resp = requests.get(f"https://api.github.com/repos/{repo.full_name}", headers=headers, timeout=30)
+        if resp.status_code == 200:
+            return resp.json().get("default_branch")
+    except:
+        pass
+    return None
+
+
 def detect_ci(
     repo: RepoInput,
     github_pat: str,

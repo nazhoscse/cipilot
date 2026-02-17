@@ -188,6 +188,7 @@ class RepoResult:
             "fork_url": self.pull_request.fork_url or "",
             "branch_name": self.pull_request.branch_name or "",
             "pr_skipped_reason": self.pull_request.skipped_reason or "",
+            "pr_error": self.pull_request.error or "",
             
             # Overall
             "overall_status": self.overall_status,

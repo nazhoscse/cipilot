@@ -132,15 +132,18 @@ def _ensure_fork(
     if resp.status_code == 200:
         fork_data = resp.json()
         if fork_data.get("fork") and fork_data.get("parent", {}).get("full_name") == repo.full_name:
+            print(f"[PR] Using existing fork: {username}/{repo.name}")
             return username, None
     
     # Create fork
+    print(f"[PR] Creating fork of {repo.full_name}...")
     create_url = f"https://api.github.com/repos/{repo.full_name}/forks"
     resp = requests.post(create_url, headers=headers, timeout=60)
     
     if resp.status_code in (200, 202):
-        # Wait for fork to be ready
-        time.sleep(3)
+        # Wait for fork to be ready (5 seconds to ensure branches sync)
+        print(f"[PR] Fork created, waiting 5 seconds for GitHub to sync...")
+        time.sleep(5)
         return username, None
     
     return None, f"Failed to create fork: {resp.text}"
@@ -154,15 +157,19 @@ def _get_branch_sha(
 ) -> Tuple[Optional[str], Optional[str]]:
     """Get SHA of branch. Returns (sha, error)"""
     
-    # Try fork first, then original repo
-    for owner in [fork_owner, repo.owner]:
+    # Try ORIGINAL repo first (always reliable), then fork
+    # New forks may not have branches synced immediately
+    for owner in [repo.owner, fork_owner]:
         url = f"https://api.github.com/repos/{owner}/{repo.name}/git/refs/heads/{branch}"
         resp = requests.get(url, headers=headers, timeout=30)
         
         if resp.status_code == 200:
-            return resp.json().get("object", {}).get("sha"), None
+            sha = resp.json().get("object", {}).get("sha")
+            if sha:
+                print(f"[PR] Got branch SHA from {owner}/{repo.name}: {sha[:8]}...")
+                return sha, None
     
-    return None, f"Branch '{branch}' not found"
+    return None, f"Branch '{branch}' not found in {repo.owner}/{repo.name} or {fork_owner}/{repo.name}"
 
 
 def _create_branch(
@@ -180,9 +187,11 @@ def _create_branch(
     
     if resp.status_code == 200:
         # Branch exists, delete and recreate
+        print(f"[PR] Branch {branch_name} exists, deleting...")
         requests.delete(check_url, headers=headers, timeout=30)
     
     # Create branch
+    print(f"[PR] Creating branch {branch_name} on {owner}/{repo_name} from SHA {sha[:8]}...")
     create_url = f"https://api.github.com/repos/{owner}/{repo_name}/git/refs"
     data = {
         "ref": f"refs/heads/{branch_name}",
@@ -191,6 +200,7 @@ def _create_branch(
     resp = requests.post(create_url, headers=headers, json=data, timeout=30)
     
     if resp.status_code in (200, 201):
+        print(f"[PR] Branch created successfully")
         return True, None
     
     return False, f"Failed to create branch: {resp.text}"

@@ -17,7 +17,7 @@ if __name__ == "__main__" or "." not in __name__:
         DetectionResult, MigrationResult, ValidationResult,
         DoubleCheckResult, PullRequestResult
     )
-    from stages.detect import detect_ci, check_rate_limit
+    from stages.detect import detect_ci, check_rate_limit, get_default_branch
     from stages.migrate import migrate_ci
     from stages.validate import validate_yaml
     from stages.double_check import semantic_double_check
@@ -32,7 +32,7 @@ else:
         DoubleCheckResult, PullRequestResult
     )
     from .stages import detect_ci, migrate_ci, validate_yaml, semantic_double_check, create_pull_request
-    from .stages.detect import check_rate_limit
+    from .stages.detect import check_rate_limit, get_default_branch
     from .reporters import CSVReporter, ConsoleProgress
 
 
@@ -272,6 +272,12 @@ class PipelineRunner:
                 result.overall_status = "failed"
                 result.error_message = "No CI configuration found"
                 return [self._finalize_result(result)]
+            
+            # Get correct default branch from GitHub API if needed
+            actual_default = get_default_branch(repo, pat)
+            if actual_default and actual_default != repo.target_branch:
+                print(f"[DETECT] Correcting branch: {repo.target_branch} → {actual_default}")
+                repo.target_branch = actual_default
             
             # Found CI configs - process EACH one separately
             num_configs = len(detection_result.detected_configs)
