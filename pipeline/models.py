@@ -42,14 +42,40 @@ class RepoInput:
 
 
 @dataclass
+class DetectedConfig:
+    """A single detected CI configuration"""
+    ci_type: str
+    source_yaml: str
+    source_path: str
+
+
+@dataclass
 class DetectionResult:
-    """Result of CI detection stage"""
+    """Result of CI detection stage - may contain multiple CI configs"""
     status: StageStatus = StageStatus.PENDING
-    detected_ci: Optional[str] = None
-    source_yaml: Optional[str] = None
-    source_path: Optional[str] = None
+    detected_configs: List[DetectedConfig] = field(default_factory=list)  # All detected configs with content
     error: Optional[str] = None
-    all_detected: List[str] = field(default_factory=list)  # All CIs found
+    
+    # Convenience properties for backward compatibility
+    @property
+    def detected_ci(self) -> Optional[str]:
+        """Get primary (first) detected CI type"""
+        return self.detected_configs[0].ci_type if self.detected_configs else None
+    
+    @property
+    def source_yaml(self) -> Optional[str]:
+        """Get primary (first) source YAML"""
+        return self.detected_configs[0].source_yaml if self.detected_configs else None
+    
+    @property
+    def source_path(self) -> Optional[str]:
+        """Get primary (first) source path"""
+        return self.detected_configs[0].source_path if self.detected_configs else None
+    
+    @property
+    def all_detected(self) -> List[str]:
+        """Get list of all detected CI types"""
+        return [c.ci_type for c in self.detected_configs]
 
 
 @dataclass
@@ -99,13 +125,16 @@ class PullRequestResult:
 
 @dataclass
 class RepoResult:
-    """Complete result for a single repository"""
+    """Complete result for a single repository + CI config combination"""
     input: RepoInput
     detection: DetectionResult = field(default_factory=DetectionResult)
     migration: MigrationResult = field(default_factory=MigrationResult)
     validation: ValidationResult = field(default_factory=ValidationResult)
     double_check: DoubleCheckResult = field(default_factory=DoubleCheckResult)
     pull_request: PullRequestResult = field(default_factory=PullRequestResult)
+    
+    # All detected CIs in this repo (for CSV reference)
+    all_detected_in_repo: List[str] = field(default_factory=list)
     
     # Timing
     started_at: Optional[datetime] = None
@@ -118,14 +147,17 @@ class RepoResult:
     
     def to_csv_row(self) -> Dict[str, Any]:
         """Convert to CSV row dictionary"""
+        # Get all detected CIs - either from explicit field or detection result
+        all_detected = self.all_detected_in_repo if self.all_detected_in_repo else self.detection.all_detected
+        
         return {
             "repo_url": self.input.repo_url,
             "repo_full_name": self.input.full_name,
             "target_branch": self.input.target_branch,
             
-            # Detection
+            # Detection - this result is for ONE specific CI
             "detected_ci": self.detection.detected_ci or "",
-            "all_detected_ci": ",".join(self.detection.all_detected),
+            "all_detected_ci": ",".join(all_detected),  # All CIs found in repo
             "detection_status": self.detection.status.value,
             "source_path": self.detection.source_path or "",
             

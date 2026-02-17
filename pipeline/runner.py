@@ -186,92 +186,143 @@ class PipelineRunner:
             if self._stop_requested:
                 break
             
-            result = self._process_repo(repo)
-            self.results.append(result)
+            # _process_repo now returns a LIST (one result per detected CI)
+            results_for_repo = self._process_repo(repo)
+            self.results.extend(results_for_repo)
             
-            # Write to CSV immediately
-            if self.csv_reporter:
-                self.csv_reporter.write_result(result)
-            
-            # Update progress
+            # CSV writing is now done inside _process_repo per CI config
+            # Update progress for each result
             if self.progress:
-                self.progress.complete_repo(result.overall_status)
+                for result in results_for_repo:
+                    self.progress.complete_repo(result.overall_status)
     
     async def _run_parallel(self, repos: List[RepoInput]):
         """Process repos in parallel with concurrency limit"""
         semaphore = asyncio.Semaphore(self.config.max_concurrent)
         
-        async def process_with_semaphore(repo: RepoInput) -> RepoResult:
+        async def process_with_semaphore(repo: RepoInput) -> List[RepoResult]:
             async with semaphore:
                 # Run in thread pool to not block
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, self._process_repo, repo)
+                results_for_repo = await loop.run_in_executor(None, self._process_repo, repo)
                 
-                # Write to CSV
-                if self.csv_reporter:
-                    self.csv_reporter.write_result(result)
-                
-                # Update progress
+                # CSV writing is done inside _process_repo
+                # Update progress for each result
                 if self.progress:
-                    self.progress.complete_repo(result.overall_status)
+                    for result in results_for_repo:
+                        self.progress.complete_repo(result.overall_status)
                 
-                return result
+                return results_for_repo
         
         tasks = [process_with_semaphore(repo) for repo in repos]
-        self.results = await asyncio.gather(*tasks)
+        nested_results = await asyncio.gather(*tasks)
+        # Flatten list of lists
+        self.results = [r for results_list in nested_results for r in results_list]
     
-    def _process_repo(self, repo: RepoInput) -> RepoResult:
-        """Process a single repository through all stages"""
-        result = RepoResult(input=repo)
-        result.started_at = datetime.now()
+    def _process_repo(self, repo: RepoInput) -> List[RepoResult]:
+        """
+        Process a single repository through all stages.
+        Returns a LIST of results - one per detected CI config.
+        Each CI config gets its own migration and PR.
+        """
+        results: List[RepoResult] = []
         
         try:
             # Check PAT availability
             pat = self.pat_rotator.get_pat()
             if not pat:
+                # Return single failure result
+                result = RepoResult(input=repo)
+                result.started_at = datetime.now()
                 result.overall_status = "failed"
                 result.error_message = "No GitHub PAT available"
-                return self._finalize_result(result)
+                return [self._finalize_result(result)]
             
             # Check rate limit
             self.pat_rotator.check_and_rotate_if_needed()
             pat = self.pat_rotator.get_pat()
             
-            # Stage 1: Detection
+            # Stage 1: Detection (finds ALL CI configs)
             if self.progress:
                 self.progress.update_current(repo.full_name, "detecting")
             
-            result.detection = detect_ci(
+            detection_result = detect_ci(
                 repo=repo,
                 github_pat=pat,
                 retries=self.config.max_retries,
                 retry_delay=self.config.retry_delay_seconds
             )
             
-            if result.detection.status == StageStatus.FAILED:
+            if detection_result.status == StageStatus.FAILED:
                 if self.progress:
                     self.progress.increment_stat("detection_failed")
+                result = RepoResult(input=repo)
+                result.started_at = datetime.now()
+                result.detection = detection_result
                 result.overall_status = "failed"
-                result.error_message = result.detection.error
-                return self._finalize_result(result)
+                result.error_message = detection_result.error
+                return [self._finalize_result(result)]
             
-            if not result.detection.detected_ci:
+            if not detection_result.detected_configs:
                 if self.progress:
                     self.progress.increment_stat("no_ci_found")
+                result = RepoResult(input=repo)
+                result.started_at = datetime.now()
+                result.detection = detection_result
                 result.overall_status = "failed"
                 result.error_message = "No CI configuration found"
-                return self._finalize_result(result)
+                return [self._finalize_result(result)]
             
+            # Found CI configs - process EACH one separately
+            num_configs = len(detection_result.detected_configs)
             if self.progress:
-                self.progress.increment_stat("detected")
+                self.progress.increment_stat("detected", num_configs)
             
+            for config in detection_result.detected_configs:
+                ci_result = self._process_single_ci(
+                    repo=repo,
+                    ci_config=config,
+                    all_detected=[c.ci_type for c in detection_result.detected_configs]
+                )
+                results.append(ci_result)
+                
+                # Write each result to CSV immediately
+                if self.csv_reporter:
+                    self.csv_reporter.write_result(ci_result)
+            
+            return results
+            
+        except Exception as e:
+            result = RepoResult(input=repo)
+            result.started_at = datetime.now()
+            result.overall_status = "failed"
+            result.error_message = str(e)
+            return [self._finalize_result(result)]
+    
+    def _process_single_ci(self, repo: RepoInput, ci_config, all_detected: List[str]) -> RepoResult:
+        """Process a single CI config for a repo through migrate → validate → double-check → PR"""
+        from models import DetectedConfig, DetectionResult
+        
+        result = RepoResult(input=repo)
+        result.started_at = datetime.now()
+        
+        # Store all detected CIs in this repo for CSV reference
+        result.all_detected_in_repo = all_detected
+        
+        # Create detection result for this specific CI
+        result.detection = DetectionResult(
+            status=StageStatus.SUCCESS,
+            detected_configs=[ci_config]
+        )
+        
+        try:
             # Stage 2: Migration
             if self.progress:
-                self.progress.update_current(repo.full_name, "migrating")
+                self.progress.update_current(f"{repo.full_name} ({ci_config.ci_type})", "migrating")
             
             result.migration = migrate_ci(
-                source_yaml=result.detection.source_yaml,
-                source_ci=result.detection.detected_ci,
+                source_yaml=ci_config.source_yaml,
+                source_ci=ci_config.ci_type,
                 target_ci="github-actions",
                 config=self.config,
                 retries=self.config.max_retries,
@@ -290,7 +341,7 @@ class PipelineRunner:
             
             # Stage 3: Validation (Linting)
             if self.progress:
-                self.progress.update_current(repo.full_name, "validating")
+                self.progress.update_current(f"{repo.full_name} ({ci_config.ci_type})", "validating")
             
             result.validation = validate_yaml(
                 yaml_content=result.migration.migrated_yaml
@@ -309,12 +360,12 @@ class PipelineRunner:
             
             if should_double_check:
                 if self.progress:
-                    self.progress.update_current(repo.full_name, "double-check")
+                    self.progress.update_current(f"{repo.full_name} ({ci_config.ci_type})", "double-check")
                 
                 result.double_check = semantic_double_check(
-                    source_yaml=result.detection.source_yaml,
+                    source_yaml=ci_config.source_yaml,
                     migrated_yaml=result.migration.migrated_yaml,
-                    source_ci=result.detection.detected_ci,
+                    source_ci=ci_config.ci_type,
                     target_ci="github-actions",
                     config=self.config,
                     retries=self.config.max_retries,
@@ -333,12 +384,13 @@ class PipelineRunner:
                     self.progress.increment_stat("double_check_skipped")
             
             # Stage 5: Pull Request (if applicable)
+            # Branch name includes CI type to avoid conflicts: cipilot/migrated-travis-to-gha
             double_check_passed = result.double_check.passed or result.double_check.status == StageStatus.SKIPPED
             should_create_pr = self.config.should_create_pr(lint_passed, double_check_passed)
             
             if should_create_pr:
                 if self.progress:
-                    self.progress.update_current(repo.full_name, "creating PR")
+                    self.progress.update_current(f"{repo.full_name} ({ci_config.ci_type})", "creating PR")
                 
                 # Get fresh PAT
                 pat = self.pat_rotator.get_pat()
@@ -346,7 +398,7 @@ class PipelineRunner:
                 result.pull_request = create_pull_request(
                     repo=repo,
                     migrated_yaml=result.migration.migrated_yaml,
-                    source_ci=result.detection.detected_ci,
+                    source_ci=ci_config.ci_type,
                     github_pat=pat,
                     branch_prefix=self.config.pr_branch_prefix,
                     retries=self.config.max_retries,

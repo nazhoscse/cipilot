@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from models import RepoInput, DetectionResult, StageStatus
+from models import RepoInput, DetectionResult, DetectedConfig, StageStatus
 from config import CI_DETECTION_PATTERNS
 
 
@@ -20,9 +20,10 @@ def detect_ci(
     retry_delay: int = 5
 ) -> DetectionResult:
     """
-    Detect CI/CD configurations in a GitHub repository.
+    Detect ALL CI/CD configurations in a GitHub repository.
     
-    Returns DetectionResult with detected CI type and source YAML.
+    Returns DetectionResult with ALL detected CI configs and their YAML content.
+    Each detected CI will be migrated separately with its own PR.
     """
     result = DetectionResult()
     
@@ -31,16 +32,8 @@ def detect_ci(
         "Accept": "application/vnd.github.v3+json",
     }
     
-    all_detected: List[str] = []
-    primary_ci: Optional[str] = None
-    primary_yaml: Optional[str] = None
-    primary_path: Optional[str] = None
-    
-    # Priority order for detection (prefer non-GitHub Actions)
-    priority_order = [
-        "circleci", "travis", "gitlab", "jenkins", "azure-pipelines",
-        "bitbucket", "drone", "semaphore", "buildkite", "appveyor", "codefresh"
-    ]
+    detected_configs: List[DetectedConfig] = []
+    seen_ci_types: set = set()  # Track which CI types we've already found
     
     for attempt in range(retries):
         try:
@@ -48,6 +41,10 @@ def detect_ci(
             for ci_type, patterns in CI_DETECTION_PATTERNS.items():
                 # Skip GitHub Actions - we're migrating TO it
                 if ci_type == "github-actions":
+                    continue
+                
+                # Skip if we already found this CI type
+                if ci_type in seen_ci_types:
                     continue
                 
                 for pattern in patterns:
@@ -67,13 +64,13 @@ def detect_ci(
                                         if file_url:
                                             file_resp = requests.get(file_url, headers=headers, timeout=30)
                                             if file_resp.status_code == 200:
-                                                if ci_type not in all_detected:
-                                                    all_detected.append(ci_type)
-                                                if primary_ci is None or priority_order.index(ci_type) < priority_order.index(primary_ci) if primary_ci in priority_order else True:
-                                                    primary_ci = ci_type
-                                                    primary_yaml = file_resp.text
-                                                    primary_path = f"{dir_path}/{f.get('name')}"
-                                                break
+                                                detected_configs.append(DetectedConfig(
+                                                    ci_type=ci_type,
+                                                    source_yaml=file_resp.text,
+                                                    source_path=f"{dir_path}/{f.get('name')}"
+                                                ))
+                                                seen_ci_types.add(ci_type)
+                                                break  # Found config for this CI type, move to next CI
                         else:
                             # It's a file
                             url = f"https://api.github.com/repos/{repo.full_name}/contents/{pattern}"
@@ -84,30 +81,26 @@ def detect_ci(
                                 content_b64 = content_data.get("content", "")
                                 if content_b64:
                                     content = base64.b64decode(content_b64).decode("utf-8")
-                                    if ci_type not in all_detected:
-                                        all_detected.append(ci_type)
-                                    if primary_ci is None or (ci_type in priority_order and (primary_ci not in priority_order or priority_order.index(ci_type) < priority_order.index(primary_ci))):
-                                        primary_ci = ci_type
-                                        primary_yaml = content
-                                        primary_path = pattern
+                                    detected_configs.append(DetectedConfig(
+                                        ci_type=ci_type,
+                                        source_yaml=content,
+                                        source_path=pattern
+                                    ))
+                                    seen_ci_types.add(ci_type)
+                                    break  # Found config for this CI type, move to next CI
                                         
                     except Exception as e:
                         # Individual file check failed, continue
                         continue
             
             # If we found something, return success
-            if primary_ci:
+            if detected_configs:
                 result.status = StageStatus.SUCCESS
-                result.detected_ci = primary_ci
-                result.source_yaml = primary_yaml
-                result.source_path = primary_path
-                result.all_detected = all_detected
+                result.detected_configs = detected_configs
                 return result
             
             # No CI found
             result.status = StageStatus.SUCCESS  # Detection succeeded, just nothing found
-            result.detected_ci = None
-            result.all_detected = all_detected
             result.error = "No CI configuration found"
             return result
             
