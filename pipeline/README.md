@@ -1,15 +1,16 @@
 # CIPilot Batch Pipeline
 
-Mass-produce CI/CD migrations for thousands of repositories with a single command.
+Mass CI/CD migrations for thousands of repositories with a single command.
 
 ## Features
 
 - **Batch Processing**: Process thousands of repos from CSV/JSON input
-- **Multi-PAT Support**: Rotate GitHub tokens when rate limited
+- **Multi-CI Detection**: Detects ALL CI configs per repo, creates separate PR for each
+- **Multi-PAT Support**: Rotate GitHub tokens from different accounts for higher rate limits
 - **Configurable Strictness**: Control when PRs are created
 - **Resume Capability**: Continue from where you left off
-- **Real-time Progress**: Live dashboard showing progress
-- **Detailed Reporting**: CSV output with per-repo status
+- **Real-time Progress**: Live dashboard showing migration progress
+- **Detailed Reporting**: CSV output with per-repo, per-CI status
 
 ## Installation
 
@@ -17,6 +18,26 @@ Mass-produce CI/CD migrations for thousands of repositories with a single comman
 cd pipeline
 pip install -r requirements.txt
 ```
+
+## Configuration
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+cp .env.example .env
+```
+
+```env
+# GitHub PATs from DIFFERENT accounts for rate limit stacking (5000/hr each)
+GITHUB_PATS=ghp_from_account1,ghp_from_account2
+
+# LLM Configuration
+LLM_PROVIDER=xai
+LLM_MODEL=grok-4-1-fast-reasoning
+LLM_API_KEY=your-api-key
+```
+
+> **Note:** Multiple PATs from the same account share the 5000/hr limit. Use PATs from different GitHub accounts for additive rate limits.
 
 ## Usage
 
@@ -26,20 +47,17 @@ pip install -r requirements.txt
 python run.py --input repos.csv --output results.csv
 ```
 
-### With Configuration
+### With Options
 
 ```bash
 python run.py \
   --input repos.csv \
   --output results.csv \
   --strictness permissive \
-  --pr-on-lint-fail \
-  --pr-on-double-check-fail \
+  --github-pats "$PAT1,$PAT2" \
   --provider xai \
   --model grok-4-1-fast-reasoning \
-  --api-key $XAI_API_KEY \
-  --github-pats "$PAT1,$PAT2,$PAT3" \
-  --concurrent 5 \
+  --concurrent 2 \
   --retries 3
 ```
 
@@ -61,17 +79,18 @@ python run.py --input repos.csv --output results.csv --resume
 
 ```csv
 repo_url,target_branch
-https://github.com/owner/repo1,main
+owner/repo1,main
 owner/repo2,master
-nazhoscse/machine,main
 ```
+
+> **Note:** If `target_branch` is incorrect, the pipeline auto-detects the actual default branch from GitHub.
 
 ### JSON
 
 ```json
 [
   {"repo_url": "owner/repo1", "target_branch": "main"},
-  {"repo_url": "owner/repo2", "target_branch": "master"}
+  {"repo_url": "owner/repo2"}
 ]
 ```
 
@@ -84,28 +103,28 @@ nazhoscse/machine,main
 | `permissive` | ❌ | ❌ | Always (for feedback) |
 | `dry_run` | N/A | N/A | Never |
 
+## PR Format
+
+PRs created by the pipeline use the same format as the web application:
+
+- **Branch**: `{prefix}-{ci_type}-to-gha-{timestamp}`
+- **Commit**: `ci: add GitHub Actions workflow (migrated by CIPilot)`
+- **Title**: `[CIPilot] Migrate {CI Name} to GitHub Actions`
+- **Body**: Full markdown with summary, changes, about, and validation sections
+
 ## Output Columns
 
 | Column | Description |
 |--------|-------------|
 | `repo_url` | Input repository |
-| `detected_ci` | CircleCI, Travis, GitLab, etc. |
-| `detection_status` | success/failed/no_ci_found |
+| `detected_ci` | circleci, travis, gitlab, etc. |
+| `all_detected_ci` | All CIs found in repo |
 | `migration_status` | success/failed/skipped |
 | `lint_valid` | true/false |
-| `lint_errors` | Error messages |
-| `double_check_status` | passed/failed/skipped |
+| `lint_errors` | actionlint error messages |
+| `double_check_passed` | true/false |
 | `double_check_confidence` | 0.0-1.0 |
-| `pr_status` | created/skipped/failed |
+| `pr_status` | success/skipped/failed |
 | `pr_url` | GitHub PR URL |
+| `pr_error` | Error message if PR failed |
 | `overall_status` | success/partial/failed |
-| `duration_seconds` | Time taken |
-
-## Environment Variables
-
-```bash
-export GITHUB_PATS="pat1,pat2,pat3"  # Comma-separated PATs
-export LLM_PROVIDER="xai"
-export LLM_API_KEY="your-api-key"
-export LLM_MODEL="grok-4-1-fast-reasoning"
-```

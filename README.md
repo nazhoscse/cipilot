@@ -16,10 +16,11 @@
    - [Backend Setup](#1-backend-setup)
    - [Web Application Setup](#2-web-application-setup)
    - [Chrome Extension Setup](#3-chrome-extension-setup-optional)
-5. [Configuration](#configuration)
+5. [Batch Pipeline](#batch-pipeline)
+6. [Configuration](#configuration)
    - [LLM Providers](#llm-providers)
    - [Environment Variables](#environment-variables)
-6. [Usage Guide](#usage-guide)
+7. [Usage Guide](#usage-guide)
    - [Web Application Workflow](#web-application-workflow)
    - [Chrome Extension Workflow](#chrome-extension-workflow)
 7. [Deployment](#deployment)
@@ -44,12 +45,13 @@ CIPilot is an AI-powered tool that:
 4. **Retries** conversion automatically (or manually) with validation feedback if errors are found.
 5. **Creates Pull Requests** on the target repository with the migrated workflow (via fork or direct branch, depending on user permissions).
 
-CIPilot ships as **three components**:
+CIPilot ships as **four components**:
 
 | Component | Technology | Purpose |
-|-----------|-----------|---------|
+|-----------|-----------|----------|
 | **Web Application** | React 18 + TypeScript + Vite + Tailwind CSS | Primary user interface for CI/CD migration |
 | **Backend API** | Python 3.11 + FastAPI + actionlint | LLM orchestration, YAML validation, conversion logic |
+| **Batch Pipeline** | Python CLI | Mass migration of thousands of repositories |
 | **Chrome Extension** | Manifest V3 | Detects CI/CD directly on GitHub pages (optional) |
 
 ---
@@ -192,6 +194,39 @@ The Chrome extension works independently on GitHub pages:
 5. Pin the extension for easy access (click the puzzle piece icon in Chrome's toolbar)
 
 > **Note:** The Chrome extension communicates with the backend at `http://localhost:5200` by default. The web application is the recommended interface for most users.
+
+---
+
+## Batch Pipeline
+
+For mass migration of thousands of repositories, use the standalone batch pipeline:
+
+```bash
+cd pipeline
+pip install -r requirements.txt
+
+# Basic usage
+python run.py --input repos.csv --output results.csv
+
+# With all options
+python run.py \
+  --input repos.csv \
+  --output results.csv \
+  --strictness permissive \
+  --github-pats "$PAT1,$PAT2" \
+  --provider xai \
+  --model grok-4-1-fast-reasoning
+```
+
+**Features:**
+- Processes CSV/JSON input with repo URLs
+- Detects ALL CI configs per repo (creates separate PR for each)
+- GitHub PAT rotation for rate limit management
+- Configurable strictness: `strict`, `lint_only`, `permissive`, `dry_run`
+- Real-time progress dashboard
+- Detailed CSV output with validation results
+
+See [pipeline/README.md](pipeline/README.md) for full documentation.
 
 ---
 
@@ -578,6 +613,25 @@ ci-cd-assistant-extension-main/
 │   │                               (Groq, OpenAI, Anthropic, Google, xAI, Ollama)
 │   ├── models.py                 # Pydantic request/response schemas
 │   └── requirements.txt          # Python dependencies
+│
+├── pipeline/                     # ── Batch Pipeline (Python CLI) ──
+│   ├── README.md                 # Pipeline documentation
+│   ├── run.py                    # CLI entry point
+│   ├── runner.py                 # Pipeline orchestration
+│   ├── config.py                 # Configuration and strictness levels
+│   ├── models.py                 # Data models for pipeline results
+│   ├── requirements.txt          # Python dependencies
+│   ├── stages/                   # Pipeline stages
+│   │   ├── detect.py             #   CI detection (all platforms)
+│   │   ├── migrate.py            #   LLM-based migration
+│   │   ├── validate.py           #   YAML + actionlint validation
+│   │   ├── double_check.py       #   Semantic verification
+│   │   └── pull_request.py       #   Fork-based PR creation
+│   ├── reporters/                # Output handlers
+│   │   ├── csv_reporter.py       #   CSV result writer
+│   │   └── console_progress.py   #   Real-time progress display
+│   ├── input/                    # Sample input files
+│   └── output/                   # Generated results
 │
 ├── web/                          # ── React Web Application ──
 │   ├── Dockerfile                # Multi-stage build: Node 20 → Nginx
