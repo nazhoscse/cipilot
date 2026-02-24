@@ -1,0 +1,70 @@
+repo_url,repo_full_name,target_branch,detected_ci,all_detected_ci,detection_status,source_path,migration_status,migration_attempts,yaml_valid,lint_valid,lint_errors,validation_status,double_check_status,double_check_passed,double_check_confidence,double_check_reasons,missing_features,hallucinated_steps,pr_status,pr_url,pr_number,pr_skipped_reason,pr_error,fork_url,branch_name,overall_status,error_message,duration_seconds,started_at,completed_at,source_yaml,migrated_yaml,fork_url,branch_name,source_yaml_length,migrated_yaml_length
+nazhoscse/machine,nazhoscse/machine,master,circleci,circleci,success,.circleci/config.yml,success,1,True,False,"../../../../../../../../../..workflow.yml:10:15: the runner of ""actions/setup-go@v4"" action is too old to run on GitHub Actions. update the action's version to fix this issue [action];    |; 10 |       - uses: actions/setup-go@v4;    |               ^~~~~~~~~~~~~~~~~~~",failed,skipped,False,0.0,,,,success,https://github.com/nazhoscse/machine/pull/37,37,,,https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771447648159,success,,8.54,2026-02-18T15:47:21.986176,2026-02-18T15:47:30.522755,"version: 2.1
+
+workflows:
+  ci:
+    jobs:
+      - build
+
+jobs:
+  build:
+    docker:
+      - image: cimg/go:1.12.9
+    steps:
+      - run: echo ""Content moved to the server branch""
+","name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.12.9'
+      - run: echo ""Content moved to the server branch""",https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771447648159,179,257
+nhossaincse/machine,nhossaincse/machine,master,circleci,"circleci,travis",success,.circleci/config.yml,success,1,True,False,"../../../../../../../../../..workflow.yml:10:15: the runner of ""actions/setup-go@v4"" action is too old to run on GitHub Actions. update the action's version to fix this issue [action];    |; 10 |       - uses: actions/setup-go@v4;    |               ^~~~~~~~~~~~~~~~~~~",failed,skipped,False,0.0,,,,success,https://github.com/nhossaincse/machine/pull/25,25,,,https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771447654005,success,,14.45,2026-02-18T15:47:22.005216,2026-02-18T15:47:36.460040,"version: 2.1
+
+workflows:
+  ci:
+    jobs:
+      - build
+
+jobs:
+  build:
+    docker:
+      - image: cimg/go:1.12.9
+    steps:
+      - run: echo ""Content moved to the server branch""
+","name: ci
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.12.9'
+      - run: echo ""Content moved to the server branch""",https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771447654005,179,256
+nhossaincse/machine,nhossaincse/machine,master,travis,"circleci,travis",success,.travis.yml,success,1,True,True,,success,success,True,1.0,,,,success,https://github.com/nhossaincse/machine/pull/26,26,,,https://github.com/ci-pilot/machine,cipilot/migrated-travis-to-gha-1771447677876,success,,23.82,2026-02-18T15:47:36.460333,2026-02-18T15:48:00.285128,"language: java
+jdk:
+  - openjdk25
+install: skip
+script: mvn -B package --fail-at-end
+","name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - run: mvn -B package --fail-at-end",https://github.com/ci-pilot/machine,cipilot/migrated-travis-to-gha-1771447677876,85,275

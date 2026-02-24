@@ -1,70 +1,54 @@
 repo_url,repo_full_name,target_branch,detected_ci,all_detected_ci,detection_status,source_path,migration_status,migration_attempts,yaml_valid,lint_valid,lint_errors,validation_status,double_check_status,double_check_passed,double_check_confidence,double_check_reasons,missing_features,hallucinated_steps,pr_status,pr_url,pr_number,pr_skipped_reason,pr_error,fork_url,branch_name,overall_status,error_message,duration_seconds,started_at,completed_at,source_yaml,migrated_yaml,fork_url,branch_name,source_yaml_length,migrated_yaml_length
-nazhoscse/machine,nazhoscse/machine,master,circleci,circleci,success,.circleci/config.yml,success,1,True,False,"../../../../../../../../../..workflow.yml:10:15: the runner of ""actions/setup-go@v4"" action is too old to run on GitHub Actions. update the action's version to fix this issue [action];    |; 10 |       - uses: actions/setup-go@v4;    |               ^~~~~~~~~~~~~~~~~~~",failed,skipped,False,0.0,,,,success,https://github.com/nazhoscse/machine/pull/36,36,,,https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771359652809,success,,8.55,2026-02-17T15:20:46.615838,2026-02-17T15:20:55.166614,"version: 2.1
-
-workflows:
-  ci:
-    jobs:
-      - build
-
-jobs:
-  build:
-    docker:
-      - image: cimg/go:1.12.9
-    steps:
-      - run: echo ""Content moved to the server branch""
-","name: ci
+Taher-Ghaleb/berg,Taher-Ghaleb/berg,master,travis,travis,success,.travis.yml,success,1,True,False,"../../../../../../../../../..workflow.yml:9:3: ""steps"" section is missing in job ""test"" [syntax-check];   |; 9 |   test:;   |   ^~~~~; ../../../../../../../../../..workflow.yml:13:15: string should not be empty [syntax-check];    |; 13 |         image:;    |               ^",failed,skipped,False,0.0,,,,success,https://github.com/Taher-Ghaleb/berg/pull/1,1,,,https://github.com/ci-pilot/berg,cipilot/migrated-travis-to-gha-1771448098723,success,,61.48,2026-02-18T15:53:59.708370,2026-02-18T15:55:01.190876,"language: ruby
+rvm:
+- 2.3.1
+env:
+- RACK_ENV=test
+addons:
+  postgresql: ""9.4""
+cache:
+  directories:
+    - vendor/bundle
+    - node_modules
+    - travis_phantomjs
+git:
+  submodules: false
+before_install:
+- export DISPLAY=:99.0
+- sh -e /etc/init.d/xvfb start
+- ""phantomjs --version""
+- ""export PATH=$PWD/travis_phantomjs/phantomjs-2.1.1-linux-x86_64/bin:$PATH""
+- ""phantomjs --version""
+- ""if [ $(phantomjs --version) != '2.1.1' ]; then rm -rf $PWD/travis_phantomjs; mkdir -p $PWD/travis_phantomjs; fi""
+- ""if [ $(phantomjs --version) != '2.1.1' ]; then wget https://assets.membergetmember.co/software/phantomjs-2.1.1-linux-x86_64.tar.bz2 -O $PWD/travis_phantomjs/phantomjs-2.1.1-linux-x86_64.tar.bz2; fi""
+- ""if [ $(phantomjs --version) != '2.1.1' ]; then tar -xvf $PWD/travis_phantomjs/phantomjs-2.1.1-linux-x86_64.tar.bz2 -C $PWD/travis_phantomjs; fi""
+- ""phantomjs --version""
+before_script:
+- cp ./config/application.travisci.yml ./config/application.yml
+- nvm install 4.4.2
+- nvm use 4.4.2
+- npm install -g npm
+- ./bin/setup --ci
+script:
+- bundle exec rake assets:precompile
+- bundle exec rake spec
+notifications:
+  email: false
+  slack:
+    on_success: change
+    on_failure: change
+    rooms:
+      secure: jiWKX7LdupH0eLEqLcPwQBIPWe0RtjGNcUROxgfA62j31Bzk0jU1SmXO3P4AzP/e4GXJAPUDpFqba+29uvaiN86HIWQM995DHqR0xxndDz7e1PcfH4kJHbzrtOdxkX76peg/wM5kiNVkXIOfUFJhFKXQwjDwJDNiuSFpt7ZTou13gjbHIiPZx3r+I2btEe0T/ugfLd9t4eYKPKgVBgiuMIS2zTkRkrdW5tF2258osYyIeRaFoGoyps458Qlew525pxoVShqRWDhhCh1/juVThSLZvcPhah7dhoULeXIvyheQCJOVv+0UxnRU42RcrstJavpzbXOBSRdkVOAR859kzRC6VPJJKqDr46WWFTRRLNhA2nCNjnJuqi6X0KoPsf/xr71Pj797V0FJAOJB3xJLYxDQlLd2Y7ozXfNVV95W8XTTs8c+25ULdwMAg0nO3hevzs3i0G/PKCmA5GNQlJirefQZ88GF4TsbQ4Im1Q+IqITMWENsIdx4/Yry3okfOBvC/7rhPTJE73dgpAaQ64CcUaR1KSzeW4KPtOVKQNAQqCbJXMOERoW+An6gU6vjT5PBX3Ve9Toc9BHtJaS6PvB5GKfmGvUqPmTtZigg8TM80epFAa3Ho/g0xzLw21HOXS2Kr5jk2N5aI1QkUbFtJln2we03pr8GPfoZDnU1TsN4s/I=
+","name: CI
 on:
   push:
   pull_request:
+env:
+  RACK_ENV: test
+  DISPLAY: :99.0
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
-        with:
-          go-version: '1.12.9'
-      - run: echo ""Content moved to the server branch""",https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771359652809,179,257
-nhossaincse/machine,nhossaincse/machine,master,circleci,"circleci,travis",success,.circleci/config.yml,success,1,True,False,"../../../../../../../../../..workflow.yml:8:15: the runner of ""actions/setup-go@v4"" action is too old to run on GitHub Actions. update the action's version to fix this issue [action];   |; 8 |       - uses: actions/setup-go@v4;   |               ^~~~~~~~~~~~~~~~~~~",failed,skipped,False,0.0,,,,success,https://github.com/nhossaincse/machine/pull/23,23,,,https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771359658015,success,,13.94,2026-02-17T15:20:46.389914,2026-02-17T15:21:00.327773,"version: 2.1
-
-workflows:
-  ci:
-    jobs:
-      - build
-
-jobs:
-  build:
-    docker:
-      - image: cimg/go:1.12.9
-    steps:
-      - run: echo ""Content moved to the server branch""
-","name: ci
-on: [push, pull_request]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
-        with:
-          go-version: '1.12.9'
-      - run: echo ""Content moved to the server branch""",https://github.com/ci-pilot/machine,cipilot/migrated-circleci-to-gha-1771359658015,179,254
-nhossaincse/machine,nhossaincse/machine,master,travis,"circleci,travis",success,.travis.yml,success,1,True,True,,success,success,True,1.0,,,,success,https://github.com/nhossaincse/machine/pull/24,24,,,https://github.com/ci-pilot/machine,cipilot/migrated-travis-to-gha-1771359701715,success,,43.73,2026-02-17T15:21:00.328356,2026-02-17T15:21:44.055565,"language: java
-jdk:
-  - openjdk25
-install: skip
-script: mvn -B package --fail-at-end
-","name: CI
-on: [push, pull_request]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
-        with:
-          java-version: '25'
-          distribution: 'temurin'
-      - name: Build
-        run: mvn -B package --fail-at-end",https://github.com/ci-pilot/machine,cipilot/migrated-travis-to-gha-1771359701715,85,323
+    services:
+      postgres:
+        image:",https://github.com/ci-pilot/berg,cipilot/migrated-travis-to-gha-1771448098723,1890,161
