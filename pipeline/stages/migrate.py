@@ -45,6 +45,7 @@ def migrate_ci(
     for attempt in range(retries):
         result.attempts = attempt + 1
         try:
+            print(f"[Migration Agent] Converting {source_ci} → {target_ci} (attempt {attempt + 1}/{retries})")
             migrated_yaml = convert_pipeline(
                 provider=config.llm_provider,
                 model=config.llm_model,

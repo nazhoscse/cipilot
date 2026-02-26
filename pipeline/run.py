@@ -13,6 +13,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
+from datetime import timedelta
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -105,6 +106,25 @@ Examples:
         help="Resume from previous run (skip already processed repos)"
     )
     
+    # Cloud GHA Verification
+    parser.add_argument(
+        "--cloud-gha-verify",
+        action="store_true",
+        help="Verify migrated workflows in GitHub Actions before creating PRs"
+    )
+    parser.add_argument(
+        "--cloud-gha-timeout",
+        type=int,
+        default=600,
+        help="Max seconds to wait for GHA run completion (default: 600)"
+    )
+    parser.add_argument(
+        "--cloud-gha-retries",
+        type=int,
+        default=3,
+        help="Max LLM fix attempts for fixable GHA errors (default: 3)"
+    )
+    
     # LLM settings
     parser.add_argument(
         "--provider",
@@ -179,6 +199,9 @@ def main():
         github_pats=pats,
         pr_branch_prefix=args.branch_prefix,
         resume=args.resume,
+        cloud_gha_verify=args.cloud_gha_verify,
+        cloud_gha_timeout=args.cloud_gha_timeout,
+        cloud_gha_retries=args.cloud_gha_retries,
     )
     
     # Print configuration summary
@@ -193,6 +216,8 @@ def main():
     print(f"  LLM:          {config.llm_provider}/{config.llm_model}")
     print(f"  GitHub PATs:  {len(pats)} configured")
     print(f"  Resume:       {config.resume}")
+    if config.cloud_gha_verify:
+        print(f"  GHA Verify:   enabled (timeout={config.cloud_gha_timeout}s, retries={config.cloud_gha_retries})")
     print("=" * 60 + "\n")
     
     # Create and run pipeline
@@ -210,20 +235,42 @@ def main():
         # Run pipeline
         results = runner.run(repos)
         
-        # Print summary
-        print(f"\n✅ Pipeline complete! Results written to: {args.output}")
+        # Get final stats from runner
+        s = runner.progress.stats if runner.progress else None
+        elapsed = timedelta(seconds=int(s.elapsed_seconds)) if s else timedelta(0)
         
-        # Quick stats
-        success = sum(1 for r in results if r.overall_status == "success")
-        partial = sum(1 for r in results if r.overall_status == "partial")
-        failed = sum(1 for r in results if r.overall_status == "failed")
-        prs_created = sum(1 for r in results if r.pull_request.pr_url)
+        # Build final summary matching the progress display
+        total = s.total if s else len(results)
         
-        print(f"\n📊 Summary:")
-        print(f"   Success: {success}")
-        print(f"   Partial: {partial}")
-        print(f"   Failed:  {failed}")
-        print(f"   PRs:     {prs_created}")
+        # GHA section (only show if cloud_gha_verify enabled)
+        gha_section = ""
+        if config.cloud_gha_verify and s:
+            gha_section = f"""║  ──────────────────────────────────────────────────────────────────────  ║
+║  🔄 GHA Pending:  {s.gha_pending:<6}  │  ✓ GHA Passed:      {s.gha_passed:<5}              ║
+║  🤖 Agent Repaired:{s.gha_fixed:<5}  │  ✗ GHA Failed:      {s.gha_failed:<5}              ║
+║  🔑 Secret Errs:  {s.gha_secret_error:<6}  │  ⏸ GHA Skipped:     {s.gha_skipped:<5}              ║
+"""
+        
+        summary = f"""
+╔══════════════════════════════════════════════════════════════════════════╗
+║                        PIPELINE COMPLETE                                 ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║  Total Processed:     {total:<6}                                           ║
+║  ──────────────────────────────────────────────────────────────────────  ║
+║  ✓ Detected:      {s.detected if s else 0:<6}  │  ✗ No CI Found:     {s.no_ci_found if s else 0:<6}              ║
+║  ✓ Migrated:      {s.migrated if s else 0:<6}  │  ✗ Migration Failed: {s.migration_failed if s else 0:<5}              ║
+║  ✓ Lint Passed:   {s.lint_passed if s else 0:<6}  │  ✗ Lint Failed:      {s.lint_failed if s else 0:<5}              ║
+║  ✓ Double-Check:  {s.double_check_passed if s else 0:<6}  │  ✗ DC Failed:        {s.double_check_failed if s else 0:<5}              ║
+{gha_section}║  ✓ PRs Created:   {s.prs_created if s else 0:<6}  │  ⏸ PRs Skipped:      {s.prs_skipped if s else 0:<5}              ║
+║  ──────────────────────────────────────────────────────────────────────  ║
+║  ✓ Success:       {s.success if s else 0:<6}  │  ~ Partial:          {s.partial if s else 0:<5}              ║
+║  ✗ Failed:        {s.failed if s else 0:<6}  │                                          ║
+║  ──────────────────────────────────────────────────────────────────────  ║
+║  Total Time:      {str(elapsed):<12}                                        ║
+╚══════════════════════════════════════════════════════════════════════════╝
+"""
+        print(summary)
+        print(f"✅ Results written to: {args.output}")
         
     except KeyboardInterrupt:
         print("\n\n⏹️  Pipeline interrupted by user")

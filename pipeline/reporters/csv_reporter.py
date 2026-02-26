@@ -36,6 +36,18 @@ class CSVReporter:
         "double_check_reasons",
         "missing_features",
         "hallucinated_steps",
+        # GHA Verification columns
+        "gha_status",
+        "gha_run_id",
+        "gha_run_url",
+        "gha_run_conclusion",
+        "gha_error_type",
+        "gha_fix_attempts",
+        "gha_error",
+        "gha_skipped_reason",
+        "gha_fork_owner",
+        "gha_branch_name",
+        # PR columns
         "pr_status",
         "pr_url",
         "pr_number",
@@ -69,6 +81,7 @@ class CSVReporter:
         self.include_yaml_content = include_yaml_content
         self._initialized = False
         self._processed_repos: Set[str] = set()
+        self._row_count = 0  # Track actual row count for correct indexing
         
         # Select columns
         self.columns = self.CORE_COLUMNS.copy()
@@ -90,19 +103,24 @@ class CSVReporter:
         
         self._initialized = True
     
-    def write_result(self, result: RepoResult):
-        """Append a single result to CSV"""
+    def write_result(self, result: RepoResult) -> int:
+        """Append a single result to CSV. Returns row index for updates."""
         if not self._initialized:
             self.initialize()
         
         row = result.to_csv_row()
         
-        # Track processed repos
+        # Track processed repos (for resume logic)
         self._processed_repos.add(result.input.repo_url)
         
         with open(self.output_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=self.columns, extrasaction="ignore")
             writer.writerow(row)
+        
+        # Return row index (0-based, not counting header) and increment counter
+        row_index = self._row_count
+        self._row_count += 1
+        return row_index
     
     def write_results(self, results: List[RepoResult]):
         """Write multiple results"""
@@ -120,12 +138,73 @@ class CSVReporter:
                 reader = csv.DictReader(f)
                 for row in reader:
                     repo_url = row.get("repo_url", "")
-                    if repo_url:
+                    # Only count as processed if not gha_pending
+                    overall_status = row.get("overall_status", "")
+                    if repo_url and overall_status != "gha_pending":
                         processed.add(repo_url)
         except Exception:
             pass
         
         return processed
+    
+    def load_gha_pending(self) -> List[Dict[str, Any]]:
+        """Load GHA pending tasks from CSV for resume"""
+        if not self.output_path.exists():
+            return []
+        
+        pending = []
+        try:
+            with open(self.output_path, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row_index, row in enumerate(reader):
+                    if row.get("overall_status") == "gha_pending":
+                        pending.append({
+                            "row_index": row_index,
+                            "repo_url": row.get("repo_url", ""),
+                            "target_branch": row.get("target_branch", "main"),
+                            "detected_ci": row.get("detected_ci", ""),
+                            "gha_fork_owner": row.get("gha_fork_owner", ""),
+                            "gha_branch_name": row.get("gha_branch_name", ""),
+                            "gha_fix_attempts": int(row.get("gha_fix_attempts", 0) or 0),
+                            "migrated_yaml": row.get("migrated_yaml", ""),
+                        })
+        except Exception:
+            pass
+        
+        return pending
+    
+    def update_result(self, row_index: int, result: RepoResult):
+        """
+        Update an existing row in the CSV (for GHA verification results).
+        Rewrites the entire CSV with the updated row.
+        """
+        if not self.output_path.exists():
+            return
+        
+        try:
+            # Read all rows
+            rows = []
+            with open(self.output_path, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    rows.append(row)
+            
+            # Update the specified row
+            if 0 <= row_index < len(rows):
+                new_row = result.to_csv_row()
+                # Merge - keep columns that might not be in new_row
+                for key in rows[row_index]:
+                    if key in new_row:
+                        rows[row_index][key] = new_row[key]
+            
+            # Rewrite CSV
+            with open(self.output_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=self.columns, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+                
+        except Exception as e:
+            print(f"Warning: Failed to update CSV row {row_index}: {e}")
     
     def get_summary(self) -> Dict[str, Any]:
         """Get summary statistics from CSV"""

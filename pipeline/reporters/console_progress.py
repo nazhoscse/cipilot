@@ -100,6 +100,15 @@ class ConsoleProgress:
         # Elapsed time formatting
         elapsed = timedelta(seconds=int(s.elapsed_seconds))
         
+        # GHA section (only show if any GHA activity)
+        gha_section = ""
+        if s.gha_pending > 0 or s.gha_passed > 0 or s.gha_failed > 0:
+            gha_section = f"""║  ──────────────────────────────────────────────────────────────────────  ║
+║  🔄 GHA Pending:  {s.gha_pending:<6}  │  ✓ GHA Passed:      {s.gha_passed:<5}              ║
+║  🤖 Agent Repaired:{s.gha_fixed:<5}  │  ✗ GHA Failed:      {s.gha_failed:<5}              ║
+║  🔑 Secret Errs:  {s.gha_secret_error:<6}  │  ⏸ GHA Skipped:     {s.gha_skipped:<5}              ║
+"""
+        
         display = f"""
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║  CIPilot Batch Pipeline - Processing {s.total:,} repositories{' ' * (26 - len(f'{s.total:,}'))}║
@@ -110,7 +119,7 @@ class ConsoleProgress:
 ║  ✓ Migrated:      {s.migrated:<6}  │  ✗ Migration Failed: {s.migration_failed:<5}              ║
 ║  ✓ Lint Passed:   {s.lint_passed:<6}  │  ✗ Lint Failed:      {s.lint_failed:<5}              ║
 ║  ✓ Double-Check:  {s.double_check_passed:<6}  │  ✗ DC Failed:        {s.double_check_failed:<5}              ║
-║  ✓ PRs Created:   {s.prs_created:<6}  │  ⏸ PRs Skipped:      {s.prs_skipped:<5}              ║
+{gha_section}║  ✓ PRs Created:   {s.prs_created:<6}  │  ⏸ PRs Skipped:      {s.prs_skipped:<5}              ║
 ║  ──────────────────────────────────────────────────────────────────────  ║
 ║  Current: {self._truncate(self.current_repo, 40):<40} ({self.current_stage:<12})    ║
 ║  ETA: {eta_str:<15} │ Elapsed: {str(elapsed):<15}                          ║

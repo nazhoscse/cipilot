@@ -47,6 +47,13 @@ class PipelineConfig:
     # Resume settings
     resume: bool = False
     
+    # Cloud GHA Verification (async verification of migrated workflows)
+    cloud_gha_verify: bool = False  # Enable GHA verification before creating PR
+    cloud_gha_timeout: int = 600  # Max seconds to wait for GHA run (10 min)
+    cloud_gha_retries: int = 3  # Max LLM fix attempts for fixable errors
+    cloud_gha_poll_interval: int = 30  # Seconds between GHA status polls
+    cloud_gha_grace_period: int = 30  # Seconds grace period on shutdown
+    
     @classmethod
     def from_env(cls) -> "PipelineConfig":
         """Load configuration from environment variables"""
@@ -97,6 +104,33 @@ class PipelineConfig:
         if not lint_passed and self.skip_double_check_on_lint_fail:
             return False
         
+        return True
+    
+    def should_create_pr_on_gha_fail(self, error_type: str, fix_attempts: int) -> bool:
+        """
+        Determine if PR should be created when GHA verification fails.
+        
+        Args:
+            error_type: "secret_error", "fixable_error", or "unknown_error"
+            fix_attempts: Number of LLM fix attempts made
+        
+        Returns:
+            True if PR should be created despite GHA failure
+        """
+        # Secret errors always get PR (not fixable, user needs to add secrets)
+        if error_type == "secret_error":
+            return True
+        
+        # DRY_RUN never creates PRs
+        if self.strictness == StrictnessLevel.DRY_RUN:
+            return False
+        
+        # STRICT mode requires GHA pass (after exhausting retries)
+        if self.strictness == StrictnessLevel.STRICT:
+            return False
+        
+        # LINT_ONLY and PERMISSIVE create PR regardless of GHA status
+        # (GHA verification is informational in these modes)
         return True
 
 

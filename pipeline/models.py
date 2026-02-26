@@ -123,6 +123,30 @@ class PullRequestResult:
     skipped_reason: Optional[str] = None
 
 
+class GHAErrorType(Enum):
+    """Types of GHA workflow errors"""
+    NONE = "none"  # No error, workflow succeeded
+    SECRET_ERROR = "secret_error"  # Missing secrets/tokens - not fixable, create PR
+    FIXABLE_ERROR = "fixable_error"  # Syntax/config error that LLM can fix
+    TIMEOUT_ERROR = "timeout_error"  # Workflow timed out
+    UNKNOWN_ERROR = "unknown_error"  # Unknown error type
+
+
+@dataclass
+class GHAVerificationResult:
+    """Result of GHA workflow verification stage"""
+    status: StageStatus = StageStatus.PENDING
+    run_id: Optional[int] = None
+    run_url: Optional[str] = None
+    run_conclusion: Optional[str] = None  # success, failure, cancelled, timed_out
+    error_type: GHAErrorType = GHAErrorType.NONE
+    error_logs: Optional[str] = None  # Relevant portion of failure logs
+    fix_attempts: int = 0  # Number of LLM fix attempts made
+    fixed_yaml: Optional[str] = None  # YAML after fix (if any)
+    error: Optional[str] = None
+    skipped_reason: Optional[str] = None
+
+
 @dataclass
 class RepoResult:
     """Complete result for a single repository + CI config combination"""
@@ -131,17 +155,22 @@ class RepoResult:
     migration: MigrationResult = field(default_factory=MigrationResult)
     validation: ValidationResult = field(default_factory=ValidationResult)
     double_check: DoubleCheckResult = field(default_factory=DoubleCheckResult)
+    gha_verification: GHAVerificationResult = field(default_factory=GHAVerificationResult)
     pull_request: PullRequestResult = field(default_factory=PullRequestResult)
     
     # All detected CIs in this repo (for CSV reference)
     all_detected_in_repo: List[str] = field(default_factory=list)
+    
+    # GHA verification state (for resume support)
+    gha_fork_owner: Optional[str] = None  # Fork owner for GHA verification
+    gha_branch_name: Optional[str] = None  # Branch pushed to fork
     
     # Timing
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     duration_seconds: float = 0.0
     
-    # Overall status
+    # Overall status: pending, gha_pending, success, partial, failed
     overall_status: str = "pending"
     error_message: Optional[str] = None
     
@@ -180,6 +209,18 @@ class RepoResult:
             "double_check_reasons": "; ".join(self.double_check.reasons),
             "missing_features": "; ".join(self.double_check.missing_features),
             "hallucinated_steps": "; ".join(self.double_check.hallucinated_steps),
+            
+            # GHA Verification
+            "gha_status": self.gha_verification.status.value,
+            "gha_run_id": self.gha_verification.run_id or "",
+            "gha_run_url": self.gha_verification.run_url or "",
+            "gha_run_conclusion": self.gha_verification.run_conclusion or "",
+            "gha_error_type": self.gha_verification.error_type.value,
+            "gha_fix_attempts": self.gha_verification.fix_attempts,
+            "gha_error": self.gha_verification.error or "",
+            "gha_skipped_reason": self.gha_verification.skipped_reason or "",
+            "gha_fork_owner": self.gha_fork_owner or "",
+            "gha_branch_name": self.gha_branch_name or "",
             
             # Pull Request
             "pr_status": self.pull_request.status.value,
@@ -226,6 +267,15 @@ class PipelineStats:
     double_check_passed: int = 0
     double_check_failed: int = 0
     double_check_skipped: int = 0
+    
+    # GHA Verification
+    gha_pending: int = 0  # Queued for GHA verification
+    gha_running: int = 0  # Currently running GHA verification
+    gha_passed: int = 0  # GHA workflow succeeded
+    gha_failed: int = 0  # GHA workflow failed (after all retries)
+    gha_fixed: int = 0  # GHA workflow fixed by LLM agent
+    gha_secret_error: int = 0  # GHA failed due to secrets (not fixable, still create PR)
+    gha_skipped: int = 0  # GHA verification skipped
     
     # PRs
     prs_created: int = 0

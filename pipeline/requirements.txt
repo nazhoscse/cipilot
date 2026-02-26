@@ -10,3 +10,4 @@ rich>=13.0.0  # For beautiful console output
 tqdm>=4.65.0  # Progress bars
 aiohttp>=3.8.0  # Async HTTP for parallel processing
 asyncio-throttle>=1.0.0  # Rate limiting
+openai>=1.0.0  # For LLM-based workflow fixing

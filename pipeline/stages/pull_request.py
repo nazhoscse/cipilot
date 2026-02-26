@@ -1,9 +1,17 @@
 """
 Pull Request Stage - Create migration PR via fork
+
+This module provides three main entry points:
+1. push_to_fork() - Push workflow to fork (for GHA verification first)
+2. create_pr_only() - Create PR from already-pushed branch
+3. create_pull_request() - Combined push + PR (original flow, still supported)
+4. update_fork_file() - Update file in fork (for GHA fix retries)
 """
 import requests
 import time
+import asyncio
 import base64
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import sys
@@ -11,6 +19,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models import RepoInput, PullRequestResult, StageStatus
+
+
+@dataclass
+class PushToForkResult:
+    """Result of pushing workflow to fork (before GHA verification)"""
+    success: bool = False
+    fork_owner: Optional[str] = None
+    fork_url: Optional[str] = None
+    branch_name: Optional[str] = None
+    branch_sha: Optional[str] = None
+    workflow_path: str = ".github/workflows/ci.yml"
+    error: Optional[str] = None
 
 
 def create_pull_request(
@@ -308,6 +328,323 @@ Learn more about this research project at [cipilot.com](https://cipilot.com).
         return pr_data.get("html_url"), pr_data.get("number"), None
     
     # Check if PR already exists
+    if resp.status_code == 422 and "already exists" in resp.text.lower():
+        return None, None, "PR already exists for this branch"
+    
+    return None, None, f"Failed to create PR: {resp.text}"
+
+
+# ============================================================================
+# NEW FUNCTIONS FOR GHA VERIFICATION FLOW
+# ============================================================================
+
+def push_to_fork(
+    repo: RepoInput,
+    migrated_yaml: str,
+    source_ci: str,
+    github_pat: str,
+    branch_prefix: str = "cipilot/migrated",
+    workflow_path: str = ".github/workflows/ci.yml",
+    retries: int = 3,
+    retry_delay: int = 5,
+) -> PushToForkResult:
+    """
+    Push workflow to fork WITHOUT creating PR.
+    Used when cloud_gha_verify is enabled to test workflow before PR.
+    
+    Args:
+        repo: Repository input
+        migrated_yaml: Migrated workflow YAML content
+        source_ci: Source CI type (for branch naming)
+        github_pat: GitHub Personal Access Token
+        branch_prefix: Prefix for branch name
+        workflow_path: Path for workflow file
+        retries: Number of retry attempts
+        retry_delay: Delay between retries
+        
+    Returns:
+        PushToForkResult with fork details
+    """
+    result = PushToForkResult(workflow_path=workflow_path)
+    
+    headers = {
+        "Authorization": f"token {github_pat}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    
+    # Get authenticated user
+    user_resp = requests.get("https://api.github.com/user", headers=headers, timeout=30)
+    if user_resp.status_code != 200:
+        result.error = f"Failed to get authenticated user: {user_resp.text}"
+        return result
+    
+    username = user_resp.json().get("login")
+    
+    for attempt in range(retries):
+        try:
+            # Step 1: Fork the repository
+            fork_owner, fork_error = _ensure_fork(repo, username, headers)
+            if not fork_owner:
+                result.error = fork_error
+                return result
+            
+            result.fork_owner = fork_owner
+            result.fork_url = f"https://github.com/{fork_owner}/{repo.name}"
+            
+            # Step 2: Get default branch SHA
+            branch_sha, branch_error = _get_branch_sha(repo, fork_owner, repo.target_branch, headers)
+            if not branch_sha:
+                result.error = branch_error
+                return result
+            
+            result.branch_sha = branch_sha
+            
+            # Step 3: Create new branch
+            timestamp = int(time.time() * 1000)
+            branch_name = f"{branch_prefix}-{source_ci}-to-gha-{timestamp}"
+            result.branch_name = branch_name
+            
+            branch_created, branch_err = _create_branch(
+                fork_owner, repo.name, branch_name, branch_sha, headers
+            )
+            if not branch_created:
+                result.error = branch_err
+                return result
+            
+            # Step 4: Create/update workflow file
+            file_created, file_err = _create_or_update_file(
+                fork_owner, repo.name, branch_name, workflow_path, migrated_yaml, headers
+            )
+            if not file_created:
+                result.error = file_err
+                return result
+            
+            result.success = True
+            return result
+            
+        except Exception as e:
+            result.error = str(e)
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+                continue
+    
+    return result
+
+
+def create_pr_only(
+    repo: RepoInput,
+    fork_owner: str,
+    branch_name: str,
+    source_ci: str,
+    github_pat: str,
+    gha_verified: bool = False,
+    gha_info: Optional[str] = None,
+) -> PullRequestResult:
+    """
+    Create PR from already-pushed fork branch.
+    Used after GHA verification completes.
+    
+    Args:
+        repo: Repository input
+        fork_owner: Owner of the fork
+        branch_name: Branch with the workflow
+        source_ci: Source CI type
+        github_pat: GitHub PAT
+        gha_verified: Whether GHA verification passed
+        gha_info: Optional info about GHA verification status
+        
+    Returns:
+        PullRequestResult
+    """
+    result = PullRequestResult()
+    result.fork_url = f"https://github.com/{fork_owner}/{repo.name}"
+    result.branch_name = branch_name
+    
+    headers = {
+        "Authorization": f"token {github_pat}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    
+    # Get authenticated user for PR creation
+    user_resp = requests.get("https://api.github.com/user", headers=headers, timeout=30)
+    if user_resp.status_code != 200:
+        result.status = StageStatus.FAILED
+        result.error = f"Failed to get authenticated user: {user_resp.text}"
+        return result
+    
+    username = user_resp.json().get("login")
+    
+    try:
+        pr_url, pr_number, pr_err = _create_pr_with_gha_info(
+            repo, fork_owner, username, branch_name, source_ci, headers,
+            gha_verified=gha_verified, gha_info=gha_info
+        )
+        
+        if not pr_url:
+            result.status = StageStatus.FAILED
+            result.error = pr_err
+            return result
+        
+        result.status = StageStatus.SUCCESS
+        result.pr_url = pr_url
+        result.pr_number = pr_number
+        return result
+        
+    except Exception as e:
+        result.status = StageStatus.FAILED
+        result.error = str(e)
+        return result
+
+
+async def update_fork_file(
+    fork_owner: str,
+    repo_name: str,
+    branch_name: str,
+    file_path: str,
+    content: str,
+    commit_message: str,
+    github_pat: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Update a file in the fork (for GHA fix retries).
+    
+    Args:
+        fork_owner: Owner of the fork
+        repo_name: Repository name
+        branch_name: Branch to update
+        file_path: Path to file
+        content: New file content
+        commit_message: Commit message
+        github_pat: GitHub PAT
+        
+    Returns:
+        Tuple of (success, error_message)
+    """
+    headers = {
+        "Authorization": f"token {github_pat}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    
+    url = f"https://api.github.com/repos/{fork_owner}/{repo_name}/contents/{file_path}"
+    
+    try:
+        # Get existing file SHA
+        loop = asyncio.get_event_loop()
+        
+        def get_sha():
+            resp = requests.get(url, headers=headers, params={"ref": branch_name}, timeout=30)
+            if resp.status_code == 200:
+                return resp.json().get("sha")
+            return None
+        
+        existing_sha = await loop.run_in_executor(None, get_sha)
+        
+        if not existing_sha:
+            return False, "File not found in fork - cannot update"
+        
+        # Update file
+        def update_file():
+            data = {
+                "message": commit_message,
+                "content": base64.b64encode(content.encode()).decode(),
+                "branch": branch_name,
+                "sha": existing_sha,
+            }
+            resp = requests.put(url, headers=headers, json=data, timeout=30)
+            return resp
+        
+        resp = await loop.run_in_executor(None, update_file)
+        
+        if resp.status_code in (200, 201):
+            return True, None
+        
+        return False, f"Failed to update file: {resp.text}"
+        
+    except Exception as e:
+        return False, f"Error updating file: {str(e)}"
+
+
+def _create_pr_with_gha_info(
+    repo: RepoInput,
+    fork_owner: str,
+    username: str,
+    branch_name: str,
+    source_ci: str,
+    headers: dict,
+    gha_verified: bool = False,
+    gha_info: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    """Create PR with GHA verification info in the body."""
+    
+    url = f"https://api.github.com/repos/{repo.full_name}/pulls"
+    ci_name = source_ci.replace("-", " ").title()
+    
+    # Add GHA verification section if applicable
+    gha_section = ""
+    if gha_verified:
+        gha_section = """
+## 🚀 GitHub Actions Verification
+
+✅ **The migrated workflow has been tested in GitHub Actions and passed successfully!**
+
+"""
+    elif gha_info:
+        gha_section = f"""
+## ⚠️ GitHub Actions Verification
+
+{gha_info}
+
+"""
+    
+    data = {
+        "title": f"[CIPilot] Migrate {ci_name} to GitHub Actions",
+        "body": f"""## Summary
+
+This pull request migrates the existing CI/CD configuration to GitHub Actions.
+
+**Source CI:** {ci_name}
+{gha_section}
+## Changes
+
+- Added `.github/workflows/ci.yml` with the migrated workflow configuration
+- The new workflow preserves the original pipeline's functionality while leveraging GitHub Actions' native integration with GitHub
+
+## About This Migration
+
+This migration was generated using [CIPilot](https://cipilot.com), an **experimental research tool** developed as part of academic research into automated CI/CD migration.
+
+**How it works:** CIPilot uses an agentic AI system powered by Large Language Models (LLMs) to analyze your existing CI/CD configuration and convert it to an equivalent GitHub Actions workflow. The AI agents iteratively refine the output through automated syntax and schema validation, using feedback loops to improve accuracy.
+
+> **Note:** This tool is currently experimental and part of ongoing research. While we strive for accuracy, please review the generated workflow carefully before merging.
+
+## Validation
+
+The generated workflow has been validated for:
+- YAML syntax correctness
+- GitHub Actions schema compliance
+
+## Before You Merge
+
+We recommend reviewing the generated workflow to ensure it fits your project's needs:
+- Verify that environment variables and secrets are correctly referenced
+- Test the workflow in a feature branch before merging
+- Adjust any project-specific settings as needed
+
+Learn more about this research project at [cipilot.com](https://cipilot.com).
+
+---
+
+*Generated by [CIPilot](https://cipilot.com) — Experimental Agentic AI for CI/CD migration*""",
+        "head": f"{fork_owner}:{branch_name}",
+        "base": repo.target_branch,
+    }
+    
+    resp = requests.post(url, headers=headers, json=data, timeout=30)
+    
+    if resp.status_code in (200, 201):
+        pr_data = resp.json()
+        return pr_data.get("html_url"), pr_data.get("number"), None
+    
     if resp.status_code == 422 and "already exists" in resp.text.lower():
         return None, None, "PR already exists for this branch"
     

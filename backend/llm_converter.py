@@ -147,7 +147,7 @@ def _openai_compatible_chat(*, base_url: str | None, api_key: str, model: str, s
     else:
         url = f"{base}/v1/chat/completions"
 
-    print(f"[LLM] Calling {url} with model={model}")
+    print(f"[Agent] Calling {url} with model={model}")
 
     resp = requests.post(
         url,
@@ -196,7 +196,7 @@ def _anthropic_chat(*, base_url: str | None, api_key: str, model: str, system: s
     base = _normalize_base_url(base_url, DEFAULT_ANTHROPIC_BASE_URL)
     url = f"{base}/v1/messages"
 
-    print(f"[LLM] Calling Anthropic {url} with model={model}")
+    print(f"[Agent] Calling Anthropic {url} with model={model}")
 
     resp = requests.post(
         url,
@@ -248,7 +248,7 @@ def _google_chat(*, base_url: str | None, api_key: str, model: str, system: str,
     # Gemini API format: /v1/models/{model}:generateContent
     url = f"{base}/v1/models/{model}:generateContent"
 
-    print(f"[LLM] Calling Google Gemini {url}")
+    print(f"[Agent] Calling Google Gemini {url}")
 
     # Combine system and user prompts for Gemini
     combined_prompt = f"{system}\n\n{user}"
