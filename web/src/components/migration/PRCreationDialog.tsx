@@ -11,6 +11,7 @@ interface PRCreationDialogProps {
   repository?: { owner: string; name: string; branch: string }
   yaml: string
   onSuccess?: (prUrl: string) => void
+  serverTokenAvailable?: boolean | null // Pass from parent to avoid redundant fetch
 }
 
 // Generate unique branch name with timestamp
@@ -25,6 +26,7 @@ export function PRCreationDialog({
   repository,
   yaml,
   onSuccess,
+  serverTokenAvailable: serverTokenAvailableProp,
 }: PRCreationDialogProps) {
   const { settings } = useSettings()
   const toast = useToast()
@@ -74,34 +76,44 @@ Learn more about this research project at [cipilot.com](https://cipilot.com).
   const [hasPushAccess, setHasPushAccess] = useState<boolean | null>(null)
   const [isCheckingAccess, setIsCheckingAccess] = useState(false)
   const [repoAccessError, setRepoAccessError] = useState<string | null>(null)
-  const [serverTokenAvailable, setServerTokenAvailable] = useState<boolean | null>(null)
+  // Use prop if provided, otherwise manage local state
+  const [serverTokenAvailableLocal, setServerTokenAvailableLocal] = useState<boolean | null>(
+    serverTokenAvailableProp ?? null
+  )
+  // Use prop value if available, otherwise use local state
+  const serverTokenAvailable = serverTokenAvailableProp ?? serverTokenAvailableLocal
 
   // Determine which token to use: user's own token or server token (via proxy)
   const userToken = settings.githubToken || undefined
   const canCreatePR = serverTokenAvailable || !!userToken
 
-  // Reset branch name when dialog opens
+  // Reset state when dialog opens
   useEffect(() => {
     if (isOpen) {
       setBranchName(generateBranchName())
       setCreatedPrUrl(null)
       setRepoAccessError(null)
+      setHasPushAccess(null) // Reset to trigger fresh access check
     }
   }, [isOpen])
 
-  // Check if server token is available (only once)
+  // Check if server token is available (only if not provided via prop)
   useEffect(() => {
-    if (serverTokenAvailable === null) {
+    // Skip if prop is provided - parent already knows the status
+    if (serverTokenAvailableProp !== undefined) {
+      return
+    }
+    if (serverTokenAvailableLocal === null) {
       githubProxyApi.getStatus()
         .then((status) => {
-          setServerTokenAvailable(status.server_token_configured)
+          setServerTokenAvailableLocal(status.server_token_configured)
           console.log('[PR] Server token available:', status.server_token_configured)
         })
         .catch(() => {
-          setServerTokenAvailable(false)
+          setServerTokenAvailableLocal(false)
         })
     }
-  }, [serverTokenAvailable])
+  }, [serverTokenAvailableProp, serverTokenAvailableLocal])
 
   // Check push access when dialog opens
   useEffect(() => {

@@ -937,6 +937,7 @@ export function ConversionPanel() {
         onClose={() => setPrDialogOpen(false)}
         repository={repository}
         yaml={editedYaml || ''}
+        serverTokenAvailable={serverTokenAvailable}
         onSuccess={async (prUrl) => {
           if (currentHistoryId) {
             updateMigration(currentHistoryId, { prUrl, status: 'pr_created' })
