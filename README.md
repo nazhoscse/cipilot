@@ -44,6 +44,7 @@ CIPilot is an AI-powered tool that:
 3. **Validates** the generated GitHub Actions YAML using PyYAML parsing and [actionlint](https://github.com/rhysd/actionlint).
 4. **Retries** conversion automatically (or manually) with validation feedback if errors are found.
 5. **Creates Pull Requests** on the target repository with the migrated workflow (via fork or direct branch, depending on user permissions).
+6. **Verifies in GitHub Actions** (optional, batch pipeline) by running the migrated workflow on a fork and auto-repairing errors with an LLM fix agent.
 
 CIPilot ships as **four components**:
 
@@ -223,6 +224,8 @@ python run.py \
 - Detects ALL CI configs per repo (creates separate PR for each)
 - GitHub PAT rotation for rate limit management
 - Configurable strictness: `strict`, `lint_only`, `permissive`, `dry_run`
+- **Cloud GHA Verification** (`--cloud-gha-verify`): Runs migrated workflows in GitHub Actions to verify they work before creating PRs
+- **LLM Fix Agent**: Automatically repairs failing workflows using error log analysis
 - Real-time progress dashboard
 - Detailed CSV output with validation results
 
@@ -626,7 +629,9 @@ ci-cd-assistant-extension-main/
 │   │   ├── migrate.py            #   LLM-based migration
 │   │   ├── validate.py           #   YAML + actionlint validation
 │   │   ├── double_check.py       #   Semantic verification
-│   │   └── pull_request.py       #   Fork-based PR creation
+│   │   ├── pull_request.py       #   Fork-based PR creation
+│   │   ├── gha_verify.py         #   Cloud GHA workflow verification
+│   │   └── gha_fix_agent.py      #   LLM-based workflow error repair
 │   ├── reporters/                # Output handlers
 │   │   ├── csv_reporter.py       #   CSV result writer
 │   │   └── console_progress.py   #   Real-time progress display

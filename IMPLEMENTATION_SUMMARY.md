@@ -20,16 +20,21 @@
    - [CI/CD Detection Logic](#cicd-detection-logic)
    - [GitHub API Integration](#github-api-integration)
    - [Pull Request Automation](#pull-request-automation)
-4. [Chrome Extension Implementation](#chrome-extension-implementation)
-5. [Infrastructure & Deployment](#infrastructure--deployment)
-6. [Data Flow](#data-flow)
-7. [Security Model](#security-model)
+4. [Batch Pipeline Implementation](#batch-pipeline-implementation)
+   - [Pipeline Stages](#pipeline-stages-per-ci-config)
+   - [Cloud GHA Verification](#cloud-gha-verification)
+   - [PAT Rotation](#pat-rotation)
+   - [Resume Support](#resume-support)
+5. [Chrome Extension Implementation](#chrome-extension-implementation)
+6. [Infrastructure & Deployment](#infrastructure--deployment)
+7. [Data Flow](#data-flow)
+8. [Security Model](#security-model)
 
 ---
 
 ## System Overview
 
-CIPilot is a three-tier application:
+CIPilot is a four-component application:
 
 ```
  User Browser                    Backend Server
@@ -49,9 +54,13 @@ CIPilot is a three-tier application:
         ▼                       └─────────────────────┘
 ┌───────────────────┐
 │ GitHub REST API   │
-│ - Repo contents   │
-│ - Fork/Branch/PR  │
-└───────────────────┘
+│ - Repo contents   │           ┌─────────────────────┐
+│ - Fork/Branch/PR  │           │ Batch Pipeline (CLI) │
+└───────────────────┘           │ - Mass migrations    │
+        ▲                       │ - GHA Verification   │
+        └───────────────────────│ - LLM Fix Agent      │
+                                │ - PAT Rotation       │
+                                └─────────────────────┘
 ```
 
 **Key design decisions:**
@@ -279,6 +288,80 @@ Check push access (GET /repos/{owner}/{repo})
 **Required PAT scopes:**
 - Classic PAT: `repo` + `workflow`
 - Fine-grained PAT: Contents (R/W) + Actions/Workflows (R/W)
+
+---
+
+## Batch Pipeline Implementation
+
+### Overview
+
+**Directory:** `pipeline/`
+
+The batch pipeline is a standalone Python CLI that processes thousands of repositories in bulk. It reuses the same LLM conversion and validation logic as the backend but adds orchestration, PAT rotation, progress tracking, and optional Cloud GHA Verification.
+
+| File | Purpose |
+|------|---------|
+| `run.py` | CLI entry point with argument parsing |
+| `runner.py` | Pipeline orchestrator (`PipelineRunner`) |
+| `config.py` | Configuration dataclass and strictness levels |
+| `models.py` | Data models for all pipeline stages |
+| `stages/detect.py` | CI detection via GitHub API |
+| `stages/migrate.py` | LLM-based CI migration |
+| `stages/validate.py` | YAML + actionlint validation |
+| `stages/double_check.py` | Semantic verification via LLM |
+| `stages/pull_request.py` | Fork-based PR creation, push-to-fork, file updates |
+| `stages/gha_verify.py` | Cloud GHA workflow verification and error classification |
+| `stages/gha_fix_agent.py` | LLM-based workflow error repair |
+| `reporters/csv_reporter.py` | CSV result streaming and resume support |
+| `reporters/console_progress.py` | Real-time terminal progress display |
+
+### Pipeline Stages (per CI config)
+
+```
+Detection → Migration → Validation → Double-Check → [GHA Verify] → PR Creation
+```
+
+Each repository may contain multiple CI configs (e.g., Travis CI + CircleCI). Each config is processed independently through all stages and produces its own CSV row and PR.
+
+### Cloud GHA Verification
+
+**Files:** `stages/gha_verify.py`, `stages/gha_fix_agent.py`
+
+When `--cloud-gha-verify` is enabled, the pipeline adds a real-world verification step between validation and PR creation:
+
+**Verification flow:**
+1. **Push to Fork** — The migrated workflow is committed to a timestamped branch on a fork.
+2. **Wait for GHA Run** — Polls GitHub API for up to 60s waiting for the push-triggered workflow run to appear.
+3. **Poll Run Status** — Polls the run at a configurable interval (default: 30s) until completion or timeout (default: 600s).
+4. **Fetch & Classify Logs** — On failure, fetches logs from failed jobs and classifies the error type using regex pattern matching:
+   - `SECRET_ERROR` — Missing secrets/tokens (15+ patterns: `secret.*not.*found`, `npm.*ERR!.*401`, `${{secrets.`, etc.)
+   - `FIXABLE_ERROR` — Build/config errors (15+ patterns: `yaml.*syntax.*error`, `BUILD FAILURE`, `command not found`, etc.)
+   - `TIMEOUT_ERROR` — Workflow exceeded the configured timeout
+   - `UNKNOWN_ERROR` — Default for unclassified failures
+5. **LLM Fix Agent** — For fixable errors, calls the LLM with the error logs and current YAML. The fix is pushed to the same branch, triggering a new GHA run. Repeats up to `--cloud-gha-retries` times.
+6. **PR Creation** — Based on strictness: `strict` requires GHA pass, `permissive`/`lint_only` create PR regardless (GHA is informational), secret errors always get PRs.
+
+**Async architecture (`runner.py`):**
+- `_run_with_gha_verify()` orchestrates the entire flow using `asyncio`.
+- A `_gha_task_feeder()` coroutine bridges sync thread pool execution and the async task queue.
+- Multiple `_gha_worker()` coroutines process GHA verification tasks concurrently.
+- `GHAVerificationTask` dataclass carries all state needed per verification (result object, fork info, YAML content, fix attempt count, CSV row index).
+- Graceful shutdown via signal handlers (`SIGINT`/`SIGTERM`) with a configurable grace period countdown.
+
+**LLM Fix Agent (`gha_fix_agent.py`):**
+- Uses a specialised system prompt instructing the LLM to fix only the specific error while preserving all other functionality.
+- Sends truncated error logs (3000 chars) plus the full workflow YAML.
+- Uses low temperature (0.1) for deterministic fixes.
+- Cleans markdown code fences from responses and validates basic YAML structure.
+- Pushes the fix to the fork via `update_fork_file()` in `pull_request.py`.
+
+### PAT Rotation
+
+`PATRotator` manages multiple GitHub PATs from different accounts. When one PAT hits the rate limit (< 100 remaining), it rotates to the next. All PATs exhausted triggers a short wait.
+
+### Resume Support
+
+The CSV reporter tracks `overall_status=gha_pending` for in-flight GHA tasks. On `--resume`, pending tasks are reconstructed from CSV and re-queued for verification.
 
 ---
 
