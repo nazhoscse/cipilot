@@ -73,6 +73,10 @@ python run.py --input repos.csv --output results.csv --dry-run
 python run.py --input repos.csv --output results.csv --resume
 ```
 
+```
+python run.py --input input/repos_sample.csv --output output/results_cloud_gha_verify.csv --cloud-gha-verify
+```
+
 ## Input Format
 
 ### CSV
