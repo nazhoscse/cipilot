@@ -149,3 +149,13 @@ h1 {
     border-radius: 8px;
     margin-top: 12px;
 }
+
+#not-github-message {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    text-align: center;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    margin-top: 12px;
+}

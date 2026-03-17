@@ -788,6 +788,16 @@ async def convert_cicd(request: ConversionRequest, http_request: Request, backgr
         # ValueError is raised by llm_converter for API errors
         error_msg = str(e)
         print(f"LLM Error during conversion: {error_msg}")
+        # Surface proper HTTP status for auth / key errors
+        if '401' in error_msg or 'Invalid API Key' in error_msg or 'Unauthorized' in error_msg or 'invalid_api_key' in error_msg:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "Invalid API Key",
+                    "message": f"The LLM provider rejected the API key. Please check your key in the CIPilot extension options.",
+                    "raw": error_msg,
+                }
+            )
         raise HTTPException(status_code=500, detail=error_msg)
     except Exception as e:
         print(f"Error during conversion: {str(e)}")

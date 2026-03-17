@@ -22,7 +22,7 @@ const CI_FILES = [
 ];
 
 chrome.runtime.onInstalled.addListener(() => {
-    console.log('CI Detector Extension installed');
+    console.log('CIPilot Extension installed');
 });
 
 async function sleep(ms) {

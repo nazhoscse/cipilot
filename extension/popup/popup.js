@@ -94,14 +94,56 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Function to fetch CI services from the content script
     function fetchCiServices() {
+        const loadingMsg = document.getElementById('loading-message');
+        const noGithubMsg = document.getElementById('not-github-message');
+
         chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-            chrome.tabs.sendMessage(tabs[0].id, { action: 'getCiServices' }, function(response) {
-                if (response && response.services) {
-                    updateUIServices(response.services);
-                } else {
+            const tab = tabs && tabs[0];
+
+            // Not on a GitHub repo page
+            if (!tab || !tab.url || !tab.url.includes('github.com/')) {
+                if (loadingMsg) loadingMsg.style.display = 'none';
+                if (noGithubMsg) noGithubMsg.style.display = 'block';
+                return;
+            }
+
+            // Timeout: if content script doesn't respond in 3s, show empty
+            let responded = false;
+            const timeout = setTimeout(() => {
+                if (!responded) {
+                    responded = true;
+                    if (loadingMsg) loadingMsg.style.display = 'none';
                     updateUIServices([]);
                 }
-            });
+            }, 3000);
+
+            try {
+                chrome.tabs.sendMessage(tab.id, { action: 'getCiServices' }, function(response) {
+                    if (responded) return; // timeout already fired
+                    responded = true;
+                    clearTimeout(timeout);
+                    if (loadingMsg) loadingMsg.style.display = 'none';
+
+                    // chrome.runtime.lastError means content script isn't available
+                    if (chrome.runtime.lastError) {
+                        console.warn('CIPilot: content script not ready:', chrome.runtime.lastError.message);
+                        updateUIServices([]);
+                        return;
+                    }
+                    if (response && response.services) {
+                        updateUIServices(response.services);
+                    } else {
+                        updateUIServices([]);
+                    }
+                });
+            } catch (e) {
+                if (!responded) {
+                    responded = true;
+                    clearTimeout(timeout);
+                    if (loadingMsg) loadingMsg.style.display = 'none';
+                    updateUIServices([]);
+                }
+            }
         });
     }
 

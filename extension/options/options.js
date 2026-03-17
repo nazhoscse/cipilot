@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
   xaiApiKey: '',
   groqApiKey: '',
   githubToken: '',
+  backendUrl: 'prod',
 };
 
 function byId(id) {
@@ -77,6 +78,9 @@ async function loadSettings() {
   const githubTokenEl = byId('githubToken');
   if (githubTokenEl) githubTokenEl.value = settings.githubToken || '';
 
+  const backendUrlEl = byId('backendUrl');
+  if (backendUrlEl) backendUrlEl.value = settings.backendUrl || 'prod';
+
   refreshProviderFields(settings.provider);
   
   // Show status for configured credentials
@@ -128,6 +132,7 @@ async function saveLlmSettings() {
   const xaiApiKey = byId('xaiApiKey').value.trim();
   const groqApiKey = byId('groqApiKey').value.trim();
 
+  const backendUrlSetting = byId('backendUrl') ? byId('backendUrl').value : 'prod';
   const effectiveModel = model || providerDefaultModel(provider);
 
   // Save model to the provider-specific field
@@ -139,6 +144,7 @@ async function saveLlmSettings() {
     openaiApiKey,
     xaiApiKey,
     groqApiKey,
+    backendUrl: backendUrlSetting,
   };
   
   // Update the provider-specific model field
@@ -176,6 +182,7 @@ async function resetDefaults() {
   await loadSettings();
   setStatus('resetStatus', 'Reset to defaults.');
 }
+
 
 let statusTimeouts = {};
 function setStatus(elementId, text) {

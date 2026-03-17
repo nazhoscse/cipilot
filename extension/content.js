@@ -1,4 +1,4 @@
-// == Main entry point for CI Detector Extension ==
+// == Main entry point for CIPilot Extension ==
 // All helpers are loaded via manifest order (utils.js, banner.js, ciDetection.js, then this file)
 
 // Cache for detected CI services to avoid re-detection on every popup open
@@ -170,7 +170,8 @@ async function convertCICD(detectedServices, targetPlatform = 'github-actions') 
         };
 
         // Send conversion request to API
-        const response = await fetch('http://localhost:5200/convert-cicd', {
+        const apiBase = await getApiBaseUrl();
+        const response = await fetch(`${apiBase}/convert-cicd`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -188,6 +189,15 @@ async function convertCICD(detectedServices, targetPlatform = 'github-actions') 
             
             console.log('Error response:', response.status, errorData);
             
+            // Handle auth / invalid API key errors
+            if (response.status === 401) {
+                const detail = errorData.detail || {};
+                const message = typeof detail === 'string' ? detail : (detail.message || 'Invalid API Key');
+                
+                showToast(`🔑 ${message}\n\nOpen CIPilot extension options to update your API key.`, 'error', 10000);
+                return;
+            }
+
             // Handle rate limit errors specially
             if (response.status === 429) {
                 const detail = errorData.detail || {};
@@ -218,7 +228,7 @@ async function convertCICD(detectedServices, targetPlatform = 'github-actions') 
         // Show detailed error message
         let errorMsg;
         if (error.message.includes('Failed to fetch')) {
-            errorMsg = 'Could not connect to the conversion server. Please make sure the server is running on http://localhost:5200';
+            errorMsg = `Could not connect to the CIPilot API server (${apiBase}). Check your backend URL in extension options.`;
         } else {
             errorMsg = `Unable to convert CI/CD configuration: ${error.message || 'Please try again later.'}`;
         }
@@ -841,7 +851,8 @@ function showConversionResult(result, cicdConfigs, repoInfo) {
         retryBtn.textContent = 'Checking...';
         
         try {
-            const validationResp = await fetch('http://localhost:5200/validate-github-actions', {
+            const valApiBase = await getApiBaseUrl();
+            const validationResp = await fetch(`${valApiBase}/validate-github-actions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ yaml: migratedPane.textarea.value || '' })
@@ -997,7 +1008,8 @@ function showConversionResult(result, cicdConfigs, repoInfo) {
                 combinedFeedback += `\n\nYou MUST fix ALL errors above. Output ONLY valid GitHub Actions YAML.`;
 
                 const llmSettings = await getLLMSettingsForRequest();
-                const retryResp = await fetch('http://localhost:5200/retry-conversion', {
+                const retryApiBase = await getApiBaseUrl();
+                const retryResp = await fetch(`${retryApiBase}/retry-conversion`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1138,7 +1150,8 @@ function showConversionResult(result, cicdConfigs, repoInfo) {
         const prevText = validateBtn.textContent;
         validateBtn.textContent = 'Validating...';
         try {
-            const resp = await fetch('http://localhost:5200/validate-github-actions', {
+            const validateApiBase = await getApiBaseUrl();
+            const resp = await fetch(`${validateApiBase}/validate-github-actions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ yaml: migratedPane.textarea.value || '' })
@@ -1553,11 +1566,11 @@ async function displayCIServicesOnPageAsync() {
     cachedCIServices = services;
     
     // Reuse or create the banner
-    let banner = document.getElementById('ci-detector-banner');
+    let banner = document.getElementById('cipilot-banner');
     let isNewBanner = false;
     if (!banner) {
         banner = document.createElement('div');
-        banner.id = 'ci-detector-banner';
+        banner.id = 'cipilot-banner';
         banner.style.position = 'relative';
         banner.style.width = '100%';
         banner.style.background = 'linear-gradient(135deg, #f6f8fa 0%, #e1e4e8 100%)';
@@ -1836,16 +1849,10 @@ document.addEventListener('pjax:end', displayCIServicesOnPageAsync);
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === 'getCiServices') {
-            // Return cached services if available, otherwise run detection
-            if (cachedCIServices !== null) {
-                sendResponse({ services: cachedCIServices });
-            } else {
-                checkForCIServicesAsync().then(services => {
-                    cachedCIServices = services;
-                    sendResponse({ services });
-                });
-                return true; // Keep the message channel open for async response
-            }
+            // Always respond instantly with whatever is cached.
+            // If detection hasn't finished yet, return empty array —
+            // the banner on the page will update once detection completes.
+            sendResponse({ services: cachedCIServices || [] });
         }
     });
 }

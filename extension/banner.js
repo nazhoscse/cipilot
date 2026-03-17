@@ -1,4 +1,4 @@
-// Banner functions for CI Detector Extension
+// Banner functions for CIPilot Extension
 function getLoadingSpinner() {
     const spinner = document.createElement('span');
     spinner.innerHTML = `
@@ -22,36 +22,36 @@ function getLoadingSpinner() {
 function showOrUpdateBanner(services, loading = false) {
     // If no services detected and not loading, hide or remove the banner
     if (services.length === 0 && !loading) {
-        if (window.ciDetectorBanner) {
-            window.ciDetectorBanner.style.display = 'none';
+        if (window.ciPilotBanner) {
+            window.ciPilotBanner.style.display = 'none';
         }
         return;
     }
 
-    if (!window.ciDetectorBanner) {
-        window.ciDetectorBanner = document.createElement('div');
-        window.ciDetectorBanner.id = 'ci-detector-banner';
-        window.ciDetectorBanner.style.position = 'relative';
-        window.ciDetectorBanner.style.top = '0';
-        window.ciDetectorBanner.style.left = '0';
-        window.ciDetectorBanner.style.width = '100%';
-        window.ciDetectorBanner.style.background = '#f2f3f1'; // lighter background
-        window.ciDetectorBanner.style.color = '#24292f'; // darker text for contrast
-        window.ciDetectorBanner.style.zIndex = '9999';
-        window.ciDetectorBanner.style.padding = '10px 0';
-        window.ciDetectorBanner.style.textAlign = 'center';
-        window.ciDetectorBanner.style.fontSize = '14px';
-        window.ciDetectorBanner.style.fontFamily = 'sans-serif';
+    if (!window.ciPilotBanner) {
+        window.ciPilotBanner = document.createElement('div');
+        window.ciPilotBanner.id = 'cipilot-banner';
+        window.ciPilotBanner.style.position = 'relative';
+        window.ciPilotBanner.style.top = '0';
+        window.ciPilotBanner.style.left = '0';
+        window.ciPilotBanner.style.width = '100%';
+        window.ciPilotBanner.style.background = '#f2f3f1'; // lighter background
+        window.ciPilotBanner.style.color = '#24292f'; // darker text for contrast
+        window.ciPilotBanner.style.zIndex = '9999';
+        window.ciPilotBanner.style.padding = '10px 0';
+        window.ciPilotBanner.style.textAlign = 'center';
+        window.ciPilotBanner.style.fontSize = '14px';
+        window.ciPilotBanner.style.fontFamily = 'sans-serif';
         // Insert after GitHub header if possible, else at top of body
         const header = document.querySelector('header');
         if (header && header.parentNode) {
-            header.parentNode.insertBefore(window.ciDetectorBanner, header.nextSibling);
+            header.parentNode.insertBefore(window.ciPilotBanner, header.nextSibling);
         } else {
-            document.body.prepend(window.ciDetectorBanner);
+            document.body.prepend(window.ciPilotBanner);
         }
     }
     
-    const banner = window.ciDetectorBanner;
+    const banner = window.ciPilotBanner;
     banner.style.display = 'block'; // Show the banner
     
     // Preserve existing conversion/migration div if it exists

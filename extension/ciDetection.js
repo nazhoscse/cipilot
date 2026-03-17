@@ -1,4 +1,4 @@
-// CI detection logic for CI Detector Extension (async, DOM+network, incremental updates)
+// CI detection logic for CIPilot Extension (async, DOM+network, incremental updates)
 const keyCIConfigs = [
     { name: 'GitHub Actions', path: '.github/workflows', isFolder: true },
     { name: 'Travis CI', path: '.travis.yml', isFolder: false },

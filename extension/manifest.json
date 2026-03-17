@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "CI Detector",
+  "name": "CIPilot",
   "version": "1.0",
-  "description": "A Chrome extension to detect CI configuration files in GitHub repositories.",
+  "description": "CIPilot – detect, analyze, and migrate CI/CD configurations in GitHub repositories.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -10,6 +10,7 @@
   ],
   "host_permissions": [
     "https://api.github.com/*",
+    "https://cipilot-api.onrender.com/*",
     "http://localhost:5200/*"
   ],
   "background": {

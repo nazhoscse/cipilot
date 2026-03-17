@@ -289,7 +289,7 @@ let banner = null;
 function showOrUpdateBanner(services, loading = false) {
     if (!banner) {
         banner = document.createElement('div');
-        banner.id = 'ci-detector-banner';
+        banner.id = 'cipilot-banner';
         banner.style.position = 'fixed';
         banner.style.top = '0';
         banner.style.left = '0';
@@ -406,11 +406,11 @@ async function displayCIServicesOnPageAsync() {
     if (isInvalidRepo()) return; // Do not show banner if repo is invalid
     const services = await checkForCIServicesAsync();
     // Remove old banner if present
-    const oldBanner = document.getElementById('ci-detector-banner');
+    const oldBanner = document.getElementById('cipilot-banner');
     if (oldBanner) oldBanner.remove();
     // Create banner
     const banner = document.createElement('div');
-    banner.id = 'ci-detector-banner';
+    banner.id = 'cipilot-banner';
     banner.style.position = 'fixed';
     banner.style.top = '0';
     banner.style.left = '0';
